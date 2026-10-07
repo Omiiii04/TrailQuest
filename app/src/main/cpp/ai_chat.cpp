@@ -24,9 +24,9 @@ static std::string join(const std::vector<T> &values, const std::string &delim) 
 /**
  * LLama resources: context, model, batch and sampler
  */
-constexpr int   N_THREADS_MIN           = 2;
-constexpr int   N_THREADS_MAX           = 4;
-constexpr int   N_THREADS_HEADROOM      = 2;
+constexpr int   N_THREADS_MIN           = 1;
+constexpr int   N_THREADS_MAX           = 8;   // raised ceiling; benchmarking can test 1..8
+constexpr int   N_THREADS_HEADROOM      = 1;   // leave 1 core free for the UI/OS
 
 constexpr int   DEFAULT_CONTEXT_SIZE    = 8192;
 constexpr int   OVERFLOW_HEADROOM       = 4;
@@ -73,17 +73,21 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_load(JNIEnv *env, jobject, jstr
     return 0;
 }
 
-static llama_context *init_context(llama_model *model, const int n_ctx = DEFAULT_CONTEXT_SIZE) {
+static llama_context *init_context(llama_model *model,
+                                   const int n_ctx = DEFAULT_CONTEXT_SIZE,
+                                   const int n_threads_override = 0) {
     if (!model) {
         LOGe("%s: model cannot be null", __func__);
         return nullptr;
     }
 
-    // Multi-threading setup
-    const int n_threads = std::max(N_THREADS_MIN, std::min(N_THREADS_MAX,
-                                                     (int) sysconf(_SC_NPROCESSORS_ONLN) -
-                                                     N_THREADS_HEADROOM));
-    LOGi("%s: Using %d threads", __func__, n_threads);
+    // Thread count: use caller-supplied override when > 0, otherwise auto-detect
+    const int cpus = (int) sysconf(_SC_NPROCESSORS_ONLN);
+    const int n_threads = (n_threads_override > 0)
+        ? std::max(N_THREADS_MIN, std::min(N_THREADS_MAX, n_threads_override))
+        : std::max(N_THREADS_MIN, std::min(N_THREADS_MAX, cpus - N_THREADS_HEADROOM));
+    LOGi("%s: Using %d threads (cpus_online=%d, override=%d)",
+         __func__, n_threads, cpus, n_threads_override);
 
     // Context parameters setup
     llama_context_params ctx_params = llama_context_default_params();
@@ -110,16 +114,31 @@ static common_sampler *new_sampler(float temp) {
     return common_sampler_init(g_model, sparams);
 }
 
+static const char * const GEMMA_CHAT_TEMPLATE =
+    "{%- for message in messages -%}\n"
+    "{{- '<start_of_turn>' + ( 'model' if message.role == 'assistant' else 'user' ) + '\\n' + message.content + '<end_of_turn>\\n' -}}\n"
+    "{%- endfor -%}\n"
+    "{%- if add_generation_prompt -%}\n"
+    "{{- '<start_of_turn>model\\n' -}}\n"
+    "{%- endif -%}";
+
 extern "C"
 JNIEXPORT jint JNICALL
-Java_com_arm_aichat_internal_InferenceEngineImpl_prepare(JNIEnv * /*env*/, jobject /*unused*/) {
-    auto *context = init_context(g_model);
+Java_com_arm_aichat_internal_InferenceEngineImpl_prepare(JNIEnv * /*env*/, jobject /*unused*/, jint nThreads) {
+    auto *context = init_context(g_model, DEFAULT_CONTEXT_SIZE, (int)nThreads);
     if (!context) { return 1; }
     g_context = context;
     g_batch = common_batch(context);
-    g_chat_templates = common_chat_templates_init(g_model, "");
+    g_chat_templates = common_chat_templates_init(g_model, GEMMA_CHAT_TEMPLATE);
     g_sampler = new_sampler(DEFAULT_SAMPLER_TEMP);
     return 0;
+}
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_arm_aichat_internal_InferenceEngineImpl_getRecommendedThreadsNative(JNIEnv * /*env*/, jobject /*unused*/) {
+    const int cpus = (int) sysconf(_SC_NPROCESSORS_ONLN);
+    return (jint) std::max(N_THREADS_MIN, std::min(N_THREADS_MAX, cpus - N_THREADS_HEADROOM));
 }
 
 static std::string get_backend() {
@@ -143,8 +162,8 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_systemInfo(JNIEnv *env, jobject
 extern "C"
 JNIEXPORT jstring JNICALL
 Java_com_arm_aichat_internal_InferenceEngineImpl_benchModel(JNIEnv *env, jobject /*unused*/, jint pp, jint tg,
-                                                      jint pl, jint nr) {
-    auto *context = init_context(g_model, pp);
+                                                      jint pl, jint nr, jint nThreads) {
+    auto *context = init_context(g_model, pp, (int)nThreads);
     if (!context) {
         const auto *const err_msg = "Fail to init_context! Bench aborted.";
         LOGe(err_msg);
@@ -291,7 +310,7 @@ static std::string chat_add_and_format(const std::string &role, const std::strin
     new_msg.role = role;
     new_msg.content = content;
     auto formatted = common_chat_format_single(
-            g_chat_templates.get(), chat_msgs, new_msg, role == ROLE_USER, /* use_jinja */ false);
+            g_chat_templates.get(), chat_msgs, new_msg, role == ROLE_USER, /* use_jinja */ true);
     chat_msgs.push_back(new_msg);
     LOGi("%s: Formatted and added %s message: \n%s\n", __func__, role.c_str(), formatted.c_str());
     return formatted;
@@ -311,6 +330,29 @@ static void reset_short_term_states() {
     stop_generation_position = 0;
     cached_token_chars.clear();
     assistant_ss.str("");
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_arm_aichat_internal_InferenceEngineImpl_resetContextNative(JNIEnv * /*env*/, jobject /*unused*/) {
+    if (g_context) {
+        reset_long_term_states(true);
+        reset_short_term_states();
+        if (g_sampler) {
+            common_sampler_reset(g_sampler);
+        }
+        LOGi("%s: Context reset (KV cache cleared, short term states reset)", __func__);
+    }
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_arm_aichat_internal_InferenceEngineImpl_setThreadsNative(JNIEnv * /*env*/, jobject /*unused*/, jint nThreads) {
+    if (g_context) {
+        const int n = std::max(N_THREADS_MIN, std::min(N_THREADS_MAX, (int) nThreads));
+        llama_set_n_threads(g_context, n, n);
+        LOGi("%s: Updated threads to %d", __func__, n);
+    }
 }
 
 static int decode_tokens_in_batches(
@@ -445,7 +487,7 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processUserPrompt(
 
     // Update position
     current_position += user_prompt_size;
-    stop_generation_position = current_position + user_prompt_size + n_predict;
+    stop_generation_position = current_position + n_predict;
     return 0;
 }
 

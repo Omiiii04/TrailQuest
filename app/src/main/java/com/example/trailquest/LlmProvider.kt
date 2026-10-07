@@ -7,5 +7,8 @@ interface LlmProvider {
     suspend fun setSystemPrompt(prompt: String)
     fun generate(prompt: String): Flow<String>
     suspend fun benchmark(): String
+    fun resetContext()
+    fun setThreads(threads: Int)
+    fun getRecommendedThreads(): Int
     fun cleanup()
 }

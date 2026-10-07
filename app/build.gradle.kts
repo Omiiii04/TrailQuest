@@ -51,6 +51,15 @@ android {
             if (signingConfigs.getByName("release").storeFile != null) {
                 signingConfig = signingConfigs.getByName("release")
             }
+            // AGP defaults to RelWithDebInfo (-O2 -g) for all variants; force Release (-O3 -DNDEBUG).
+            // Per-buildType args do NOT inherit defaultConfig args, so repeat them here.
+            externalNativeBuild {
+                cmake {
+                    arguments("-DCMAKE_BUILD_TYPE=Release",
+                              "-DGGML_OPENMP=OFF",
+                              "-DGGML_LLAMAFILE=OFF")
+                }
+            }
         }
     }
     compileOptions {

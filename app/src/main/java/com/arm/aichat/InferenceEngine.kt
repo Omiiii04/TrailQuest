@@ -41,6 +41,21 @@ interface InferenceEngine {
     fun cleanUp()
 
     /**
+     * Resets conversation history and KV cache without unloading the model.
+     */
+    fun resetContext()
+
+    /**
+     * Updates active thread count for inference.
+     */
+    fun setThreads(threads: Int)
+
+    /**
+     * Recommended thread count based on online CPU cores.
+     */
+    fun getRecommendedThreads(): Int
+
+    /**
      * Cleans up resources when the engine is no longer needed.
      */
     fun destroy()

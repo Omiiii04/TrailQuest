@@ -86,13 +86,22 @@ internal class InferenceEngineImpl private constructor(
     private external fun load(modelPath: String): Int
 
     @FastNative
-    private external fun prepare(): Int
+    private external fun prepare(nThreads: Int): Int
 
     @FastNative
     private external fun systemInfo(): String
 
     @FastNative
-    private external fun benchModel(pp: Int, tg: Int, pl: Int, nr: Int): String
+    private external fun benchModel(pp: Int, tg: Int, pl: Int, nr: Int, nThreads: Int): String
+
+    @FastNative
+    private external fun getRecommendedThreadsNative(): Int
+
+    @FastNative
+    private external fun resetContextNative()
+
+    @FastNative
+    private external fun setThreadsNative(nThreads: Int)
 
     @FastNative
     private external fun processSystemPrompt(systemPrompt: String): Int
@@ -168,7 +177,9 @@ internal class InferenceEngineImpl private constructor(
                     // TODO-han.yin: find a better way to pass other error codes
                     if (it != 0) throw UnsupportedArchitectureException()
                 }
-                prepare().let {
+                val nThreads = getRecommendedThreads()
+                Log.i(TAG, "Preparing context with $nThreads threads...")
+                prepare(nThreads).let {
                     if (it != 0) throw IOException("Failed to prepare resources")
                 }
                 Log.i(TAG, "Model loaded!")
@@ -267,10 +278,11 @@ internal class InferenceEngineImpl private constructor(
             check(_state.value is InferenceEngine.State.ModelReady) {
                 "Benchmark request discarded due to: $state"
             }
-            Log.i(TAG, "Start benchmark (pp: $pp, tg: $tg, pl: $pl, nr: $nr)")
+            val nThreads = getRecommendedThreads()
+            Log.i(TAG, "Start benchmark (pp: $pp, tg: $tg, pl: $pl, nr: $nr, threads: $nThreads)")
             _readyForSystemPrompt = false   // Just to be safe
             _state.value = InferenceEngine.State.Benchmarking
-            benchModel(pp, tg, pl, nr).also {
+            benchModel(pp, tg, pl, nr, nThreads).also {
                 _state.value = InferenceEngine.State.ModelReady
             }
         }
@@ -303,6 +315,27 @@ internal class InferenceEngineImpl private constructor(
 
                 else -> throw IllegalStateException("Cannot unload model in ${state.javaClass.simpleName}")
             }
+        }
+    }
+
+    override fun resetContext() {
+        if (_state.value is InferenceEngine.State.ModelReady) {
+            resetContextNative()
+            _readyForSystemPrompt = true
+        }
+    }
+
+    override fun setThreads(threads: Int) {
+        if (_state.value is InferenceEngine.State.ModelReady) {
+            setThreadsNative(threads)
+        }
+    }
+
+    override fun getRecommendedThreads(): Int {
+        return try {
+            getRecommendedThreadsNative()
+        } catch (e: Exception) {
+            4
         }
     }
 
