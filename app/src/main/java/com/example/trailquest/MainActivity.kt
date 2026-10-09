@@ -17,6 +17,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.coroutines.coroutineContext
 
@@ -49,9 +50,91 @@ class MainActivity : ComponentActivity() {
 }
 
 private const val BENCH_PROMPT =
-    "You are a helpful AI guide for an outdoor activity app. Provide exactly one simple outdoor mission formatted as a JSON object with 'title', 'durationMinutes', and 'missions' fields. Return ONLY valid JSON.\n\nCreate one simple 30-minute outdoor mission for a person going for a walk."
+    "Generate exactly one JSON object with all three fields: \"title\", \"durationMinutes\", and \"missions\".\n\n" +
+    "Schema:\n" +
+    "{\"title\": \"Walking Mission\", \"durationMinutes\": 30, \"missions\": [\"Walk for 30 minutes\"]}\n\n" +
+    "Request: Create one simple 30-minute walking mission. Output ONLY the JSON object starting with { and ending with }."
 
 private class JsonCompleteException : Exception()
+
+private data class MissionValidationResult(
+    val isValid: Boolean,
+    val isFallback: Boolean,
+    val statusLabel: String,
+    val failureReason: String? = null,
+    val finalMission: JSONObject
+)
+
+private fun getDeterministicFallbackMission(): JSONObject {
+    return JSONObject().apply {
+        put("title", "Neighborhood Nature Walk")
+        put("durationMinutes", 30)
+        put("missions", JSONArray().apply {
+            put("Walk at a brisk pace for 15 minutes along a local park or green trail.")
+            put("Identify three distinct types of native trees or urban plants.")
+            put("Complete a gentle 15-minute return loop while tracking step cadence.")
+        })
+    }
+}
+
+/**
+ * Validates complete mission schema:
+ * - non-empty title (String)
+ * - integer durationMinutes (Int > 0)
+ * - non-empty missions array (with valid entries)
+ * Applies deterministic fallback when schema is incomplete.
+ */
+private fun validateAndResolveMission(rawJson: JSONObject?): MissionValidationResult {
+    if (rawJson == null) {
+        return MissionValidationResult(
+            isValid = false,
+            isFallback = false,
+            statusLabel = "Invalid",
+            failureReason = "No JSON object parsed from raw generation",
+            finalMission = getDeterministicFallbackMission()
+        )
+    }
+
+    val title = rawJson.optString("title", "").trim()
+    val hasTitle = title.isNotEmpty()
+
+    val duration = rawJson.optInt("durationMinutes", -1)
+    val hasDuration = duration > 0
+
+    val missionsArr = rawJson.optJSONArray("missions") ?: rawJson.optJSONArray("mission")
+    var hasValidMissions = missionsArr != null && missionsArr.length() > 0
+    if (hasValidMissions && missionsArr != null) {
+        for (i in 0 until missionsArr.length()) {
+            val item = missionsArr.opt(i)
+            if (item == null || (item is String && item.isBlank()) || (item is JSONObject && item.length() == 0)) {
+                hasValidMissions = false
+                break
+            }
+        }
+    }
+
+    if (hasTitle && hasDuration && hasValidMissions) {
+        return MissionValidationResult(
+            isValid = true,
+            isFallback = false,
+            statusLabel = "Valid",
+            finalMission = rawJson
+        )
+    }
+
+    val missingFields = mutableListOf<String>()
+    if (!hasTitle) missingFields.add("title")
+    if (!hasDuration) missingFields.add("durationMinutes")
+    if (!hasValidMissions) missingFields.add("missions[]")
+
+    return MissionValidationResult(
+        isValid = false,
+        isFallback = true,
+        statusLabel = "Fallback",
+        failureReason = "Incomplete schema; missing: ${missingFields.joinToString(", ")}",
+        finalMission = getDeterministicFallbackMission()
+    )
+}
 
 /**
  * Extracts and parses a JSONObject even if surrounded by markdown code fences,
@@ -90,7 +173,7 @@ fun TrailQuestApp(llmProvider: LlmProvider, modelInstaller: ModelInstaller) {
 
     LaunchedEffect(Unit) {
         try {
-            modelPath = modelInstaller.installModel("gemma-3-270m-q4_k_m.gguf")
+            modelPath = modelInstaller.installModel("gemma-3-270m-it-q4_k_m.gguf")
             llmProvider.loadModel(modelPath)
             isReady = true
         } catch (e: Exception) {
@@ -125,7 +208,144 @@ fun DemoScreen(llmProvider: LlmProvider) {
     val scope = rememberCoroutineScope()
 
     val recommendedThreads = remember { llmProvider.getRecommendedThreads().coerceIn(1, 8) }
-    var selectedThreads by remember { mutableIntStateOf(recommendedThreads) }
+    var selectedThreads by remember { mutableIntStateOf(4) }
+
+    fun runIterations(totalIterations: Int) {
+        if (isRunning) return
+        isRunning = true
+        output = "Running ${if (totalIterations == 1) "single test" else "benchmark (20 iterations)"} with $selectedThreads threads...\n\n"
+
+        benchJob = scope.launch(Dispatchers.IO) {
+            llmProvider.setThreads(selectedThreads)
+            var validCount = 0
+            var fallbackCount = 0
+            var invalidCount = 0
+            var completedIters = 0
+
+            var totalTokens = 0L
+            var totalGenMs = 0L
+            var totalFirstTokenMs = 0L
+
+            val wallStart = System.currentTimeMillis()
+
+            try {
+                for (i in 1..totalIterations) {
+                    if (!coroutineContext.isActive) break
+
+                    llmProvider.resetContext()
+
+                    var currentText = ""
+                    var tokenCount = 0
+                    var firstTokenMs = -1L
+                    var validatedResult: MissionValidationResult? = null
+
+                    val iterStart = System.currentTimeMillis()
+                    try {
+                        llmProvider.generate(BENCH_PROMPT).collect { token ->
+                            if (firstTokenMs < 0) {
+                                firstTokenMs = System.currentTimeMillis() - iterStart
+                            }
+                            currentText += token
+                            tokenCount++
+
+                            // Early-stop check: if closing brace emitted and full schema is valid
+                            if (token.contains("}")) {
+                                val candidate = extractJson(currentText)
+                                if (candidate != null) {
+                                    val check = validateAndResolveMission(candidate)
+                                    if (check.isValid) {
+                                        validatedResult = check
+                                        throw JsonCompleteException()
+                                    }
+                                }
+                            }
+                        }
+                    } catch (_: JsonCompleteException) {
+                        // Completed valid JSON early
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                    }
+
+                    if (validatedResult == null) {
+                        val parsed = extractJson(currentText)
+                        validatedResult = validateAndResolveMission(parsed)
+                    }
+
+                    val res = validatedResult!!
+                    if (res.isValid) {
+                        validCount++
+                    } else if (res.isFallback) {
+                        fallbackCount++
+                    } else {
+                        invalidCount++
+                    }
+
+                    val iterMs = System.currentTimeMillis() - iterStart
+                    val tokPerSec = if (iterMs > 0) tokenCount * 1000.0 / iterMs else 0.0
+                    val ftMs = if (firstTokenMs >= 0) firstTokenMs else -1L
+
+                    totalTokens += tokenCount
+                    totalGenMs += iterMs
+                    if (ftMs >= 0) totalFirstTokenMs += ftMs
+                    completedIters++
+
+                    Log.d("TrailQuest/Raw", "Iter $i raw output:\n$currentText")
+                    Log.d("TrailQuest/Schema", "Iter $i status: ${res.statusLabel} | final json: ${res.finalMission}")
+
+                    val statusSymbol = if (res.isValid) "✓ (Valid)" else if (res.isFallback) "~ (Fallback)" else "✗ (Invalid)"
+                    val missionTitle = res.finalMission.optString("title", "No Title")
+                    val iterLine = "Iter $i: ${iterMs}ms | tokens=$tokenCount | t/s=${"%.1f".format(tokPerSec)} | TTFT=${ftMs}ms | $statusSymbol [\"$missionTitle\"]\n"
+                    Log.i("TrailQuest/Bench", iterLine.trim())
+
+                    if (totalIterations == 1) {
+                        val singleDetail = buildString {
+                            append(iterLine)
+                            append("\n[Raw Response]:\n$currentText\n\n")
+                            append("[Parsed / Resolved Mission JSON]:\n${res.finalMission.toString(2)}\n")
+                        }
+                        withContext(Dispatchers.Main) {
+                            output += singleDetail
+                        }
+                    } else {
+                        withContext(Dispatchers.Main) {
+                            output += iterLine
+                        }
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                Log.i("TrailQuest/Bench", "Benchmark cancelled by user")
+            }
+
+            val wallMs = System.currentTimeMillis() - wallStart
+            val avgTps = if (totalGenMs > 0) totalTokens * 1000.0 / totalGenMs else 0.0
+            val avgFirstMs = if (completedIters > 0) totalFirstTokenMs / completedIters else 0L
+            val avgTokens = if (completedIters > 0) totalTokens.toDouble() / completedIters else 0.0
+            val avgGenMs = if (completedIters > 0) totalGenMs / completedIters else 0L
+
+            val summary = buildString {
+                append("\n========================================\n")
+                append("--- Benchmark Results ($completedIters / $totalIterations completed, ${selectedThreads}T) ---\n")
+                append("========================================\n")
+                append("Valid missions      : $validCount / $totalIterations\n")
+                append("Fallback missions   : $fallbackCount / $totalIterations\n")
+                append("Invalid (malformed) : $invalidCount / $totalIterations\n")
+                append("Avg generation time : ${avgGenMs} ms\n")
+                append("Avg first-token     : ${avgFirstMs} ms\n")
+                append("Avg throughput      : ${"%.2f".format(avgTps)} tok/s\n")
+                append("Avg token count     : ${"%.1f".format(avgTokens)} tokens\n")
+                append("Total tokens        : $totalTokens\n")
+                append("Total wall time     : ${wallMs} ms\n")
+                append("========================================\n")
+            }
+            Log.i("TrailQuest/Bench", summary)
+
+            withContext(Dispatchers.Main) {
+                output += summary
+                isRunning = false
+                benchJob = null
+            }
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -134,10 +354,10 @@ fun DemoScreen(llmProvider: LlmProvider) {
             .verticalScroll(rememberScrollState())
     ) {
         Text("TRAILQUEST AI", style = MaterialTheme.typography.headlineMedium)
-        Text("Model: Gemma 3 270M Q4_K_M")
+        Text("Model: Gemma 3 270M IT Q4_K_M")
         Text("Runtime: llama.cpp (arm64-v8a)")
-        Text("Inference: LOCAL")
-        Text("Network: DISABLED")
+        Text("Inference: In-Process JNI")
+        Text("Network: Offline Verified (NO INTERNET)")
 
         Spacer(modifier = Modifier.height(12.dp))
 
@@ -172,149 +392,33 @@ fun DemoScreen(llmProvider: LlmProvider) {
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Button(
-                onClick = {
-                    if (isRunning) return@Button
-                    isRunning = true
-                    output = "Running benchmark (20 iterations) with $selectedThreads threads...\n"
-
-                    benchJob = scope.launch(Dispatchers.IO) {
-                        llmProvider.setThreads(selectedThreads)
-                        val totalIterations = 20
-                        var successCount = 0
-                        var failCount = 0
-                        var fallbackCount = 0
-                        var completedIters = 0
-
-                        // Aggregate metrics
-                        var totalTokens = 0L
-                        var totalGenMs = 0L
-                        var totalFirstTokenMs = 0L
-
-                        val wallStart = System.currentTimeMillis()
-
-                        try {
-                            for (i in 1..totalIterations) {
-                                if (!coroutineContext.isActive) break
-
-                                // Reset context & KV cache before every iteration
-                                llmProvider.resetContext()
-
-                                var currentText = ""
-                                var tokenCount = 0
-                                var firstTokenMs = -1L
-                                var jsonOk = false
-                                var parsedJson: JSONObject? = null
-
-                                val iterStart = System.currentTimeMillis()
-                                try {
-                                    llmProvider.generate(BENCH_PROMPT).collect { token ->
-                                        if (firstTokenMs < 0) {
-                                            firstTokenMs = System.currentTimeMillis() - iterStart
-                                        }
-                                        currentText += token
-                                        tokenCount++
-
-                                        // Early stop: if a closing brace was emitted and valid mission JSON is complete, finish early
-                                        if (token.contains("}")) {
-                                            val candidate = extractJson(currentText)
-                                            if (candidate != null && candidate.has("title") && (candidate.has("missions") || candidate.has("mission"))) {
-                                                parsedJson = candidate
-                                                throw JsonCompleteException()
-                                            }
-                                        }
-                                    }
-                                } catch (_: JsonCompleteException) {
-                                    // Successfully completed valid JSON early
-                                } catch (e: Exception) {
-                                    if (e is kotlinx.coroutines.CancellationException) throw e
-                                }
-
-                                if (parsedJson == null) {
-                                    parsedJson = extractJson(currentText)
-                                }
-
-                                Log.d("TrailQuest/Raw", "Iter $i raw: $currentText")
-
-                                if (parsedJson != null) {
-                                    val hasTitle = parsedJson!!.has("title")
-                                    val hasMissions = parsedJson!!.has("missions") || parsedJson!!.has("mission")
-                                    if (hasTitle && hasMissions) {
-                                        successCount++
-                                        jsonOk = true
-                                    } else {
-                                        fallbackCount++
-                                    }
-                                } else {
-                                    failCount++
-                                }
-
-                                val iterMs = System.currentTimeMillis() - iterStart
-                                val tokPerSec = if (iterMs > 0) tokenCount * 1000.0 / iterMs else 0.0
-                                val ftMs = if (firstTokenMs >= 0) firstTokenMs else -1L
-
-                                totalTokens += tokenCount
-                                totalGenMs += iterMs
-                                if (ftMs >= 0) totalFirstTokenMs += ftMs
-                                completedIters++
-
-                                val jsonStatus = if (jsonOk) "✓" else if (parsedJson != null) "~" else "✗"
-                                val titleSnippet = parsedJson?.optString("title")?.take(30)
-                                    ?: currentText.take(30).replace("\n", " ")
-                                val iterLine = "Iter $i: ${iterMs}ms | tokens=$tokenCount | t/s=${"%.1f".format(tokPerSec)} | first=${ftMs}ms $jsonStatus [\"$titleSnippet\"]\n"
-                                Log.d("TrailQuest/Bench", iterLine.trim())
-
-                                withContext(Dispatchers.Main) {
-                                    output += iterLine
-                                }
-                            }
-                        } catch (e: kotlinx.coroutines.CancellationException) {
-                            Log.i("TrailQuest/Bench", "Benchmark cancelled by user")
-                        }
-
-                        val wallMs = System.currentTimeMillis() - wallStart
-                        val avgTps = if (totalGenMs > 0) totalTokens * 1000.0 / totalGenMs else 0.0
-                        val avgFirstMs = if (completedIters > 0) totalFirstTokenMs / completedIters else 0L
-
-                        val summary = buildString {
-                            append("\n--- Summary ($completedIters / $totalIterations completed, ${selectedThreads}T) ---\n")
-                            append("Total wall time : ${wallMs}ms\n")
-                            if (completedIters > 0) {
-                                append("Avg gen time    : ${totalGenMs / completedIters}ms/iter\n")
-                                append("Avg first-token : ${avgFirstMs}ms\n")
-                            }
-                            append("Total tokens    : $totalTokens\n")
-                            append("Avg t/s         : ${"%.2f".format(avgTps)}\n")
-                            append("Success ✓       : $successCount | Partial: $fallbackCount | Fail: $failCount\n")
-                        }
-                        Log.i("TrailQuest/Bench", summary)
-
-                        withContext(Dispatchers.Main) {
-                            output += summary
-                            isRunning = false
-                            benchJob = null
-                        }
-                    }
-                },
+                onClick = { runIterations(1) },
                 enabled = !isRunning,
                 modifier = Modifier.weight(1f)
             ) {
-                Text(if (isRunning) "Running..." else "Run Benchmark (20x)")
+                Text("Verify (1x)")
+            }
+
+            Button(
+                onClick = { runIterations(20) },
+                enabled = !isRunning,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Benchmark (20x)")
             }
 
             if (isRunning) {
                 Button(
-                    onClick = {
-                        benchJob?.cancel()
-                    },
+                    onClick = { benchJob?.cancel() },
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                    modifier = Modifier.weight(0.5f)
+                    modifier = Modifier.weight(0.6f)
                 ) {
                     Text("Stop")
                 }
             } else if (output.isNotEmpty()) {
                 OutlinedButton(
                     onClick = { output = "" },
-                    modifier = Modifier.weight(0.5f)
+                    modifier = Modifier.weight(0.6f)
                 ) {
                     Text("Clear")
                 }

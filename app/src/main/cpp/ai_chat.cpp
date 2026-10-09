@@ -115,11 +115,20 @@ static common_sampler *new_sampler(float temp) {
 }
 
 static const char * const GEMMA_CHAT_TEMPLATE =
-    "{%- for message in messages -%}\n"
-    "{{- '<start_of_turn>' + ( 'model' if message.role == 'assistant' else 'user' ) + '\\n' + message.content + '<end_of_turn>\\n' -}}\n"
-    "{%- endfor -%}\n"
-    "{%- if add_generation_prompt -%}\n"
-    "{{- '<start_of_turn>model\\n' -}}\n"
+    "{{ bos_token }}"
+    "{%- if messages[0]['role'] == 'system' -%}"
+    "    {%- set first_user_prefix = messages[0]['content'] + '\\n\\n' -%}"
+    "    {%- set loop_messages = messages[1:] -%}"
+    "{%- else -%}"
+    "    {%- set first_user_prefix = '' -%}"
+    "    {%- set loop_messages = messages -%}"
+    "{%- endif -%}"
+    "{%- for message in loop_messages -%}"
+    "    {%- set role = 'model' if message['role'] == 'assistant' else message['role'] -%}"
+    "    {{ '<start_of_turn>' + role + '\\n' + (first_user_prefix if loop.first else '') + message['content'] | trim + '<end_of_turn>\\n' }}"
+    "{%- endfor -%}"
+    "{%- if add_generation_prompt -%}"
+    "    {{ '<start_of_turn>model\\n' }}"
     "{%- endif -%}";
 
 extern "C"
@@ -129,7 +138,18 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_prepare(JNIEnv * /*env*/, jobje
     if (!context) { return 1; }
     g_context = context;
     g_batch = common_batch(context);
-    g_chat_templates = common_chat_templates_init(g_model, GEMMA_CHAT_TEMPLATE);
+
+    const char * model_tmpl = llama_model_chat_template(g_model, nullptr);
+    if (model_tmpl && strlen(model_tmpl) > 0) {
+        LOGi("%s: Found embedded chat template in model metadata.", __func__);
+        g_chat_templates = common_chat_templates_init(g_model, model_tmpl);
+    } else {
+        LOGw("%s: No embedded chat template found; using explicit Gemma fallback template.", __func__);
+        g_chat_templates = common_chat_templates_init(g_model, GEMMA_CHAT_TEMPLATE);
+    }
+    LOGi("%s: Initialized chat template source:\n%s\n",
+         __func__, common_chat_templates_source(g_chat_templates.get()).c_str());
+
     g_sampler = new_sampler(DEFAULT_SAMPLER_TEMP);
     return 0;
 }
@@ -463,6 +483,8 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processUserPrompt(
         formatted_user_prompt = chat_add_and_format(ROLE_USER, user_prompt);
     }
     env->ReleaseStringUTFChars(juser_prompt, user_prompt);
+
+    LOGi("%s: Actual formatted prompt to decode:\n%s\n", __func__, formatted_user_prompt.c_str());
 
     // Decode formatted user prompts
     auto user_tokens = common_tokenize(g_context, formatted_user_prompt, has_chat_template, has_chat_template);
