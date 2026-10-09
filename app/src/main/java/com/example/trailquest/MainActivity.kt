@@ -57,15 +57,16 @@ private const val BENCH_PROMPT =
 
 private class JsonCompleteException : Exception()
 
-private data class MissionValidationResult(
+internal data class MissionValidationResult(
     val isValid: Boolean,
-    val isFallback: Boolean,
+    val isFallbackApplied: Boolean,
+    val isMalformed: Boolean,
     val statusLabel: String,
     val failureReason: String? = null,
     val finalMission: JSONObject
 )
 
-private fun getDeterministicFallbackMission(): JSONObject {
+internal fun getDeterministicFallbackMission(): JSONObject {
     return JSONObject().apply {
         put("title", "Neighborhood Nature Walk")
         put("durationMinutes", 30)
@@ -80,58 +81,78 @@ private fun getDeterministicFallbackMission(): JSONObject {
 /**
  * Validates complete mission schema:
  * - non-empty title (String)
- * - integer durationMinutes (Int > 0)
- * - non-empty missions array (with valid entries)
- * Applies deterministic fallback when schema is incomplete.
+ * - actual positive integer durationMinutes (Int > 0)
+ * - non-empty missions array (JSONArray containing only non-empty Strings)
+ *
+ * Strict validation: does not accept singular "mission" field.
+ * Returns deterministic fallback when raw JSON is null/malformed or schema is incomplete.
  */
-private fun validateAndResolveMission(rawJson: JSONObject?): MissionValidationResult {
+internal fun validateAndResolveMission(rawJson: JSONObject?): MissionValidationResult {
     if (rawJson == null) {
         return MissionValidationResult(
             isValid = false,
-            isFallback = false,
-            statusLabel = "Invalid",
-            failureReason = "No JSON object parsed from raw generation",
+            isFallbackApplied = true,
+            isMalformed = true,
+            statusLabel = "Malformed (Fallback Applied)",
+            failureReason = "No valid JSON object parsed from raw generation",
             finalMission = getDeterministicFallbackMission()
         )
     }
 
-    val title = rawJson.optString("title", "").trim()
-    val hasTitle = title.isNotEmpty()
+    val missingOrInvalid = mutableListOf<String>()
 
-    val duration = rawJson.optInt("durationMinutes", -1)
-    val hasDuration = duration > 0
+    // 1. Strict non-empty string title
+    val rawTitle = rawJson.opt("title")
+    val hasValidTitle = rawTitle is String && rawTitle.trim().isNotEmpty()
+    if (!hasValidTitle) {
+        missingOrInvalid.add("title (must be non-empty string)")
+    }
 
-    val missionsArr = rawJson.optJSONArray("missions") ?: rawJson.optJSONArray("mission")
-    var hasValidMissions = missionsArr != null && missionsArr.length() > 0
-    if (hasValidMissions && missionsArr != null) {
-        for (i in 0 until missionsArr.length()) {
-            val item = missionsArr.opt(i)
-            if (item == null || (item is String && item.isBlank()) || (item is JSONObject && item.length() == 0)) {
-                hasValidMissions = false
+    // 2. Strict actual positive integer durationMinutes
+    val rawDuration = rawJson.opt("durationMinutes")
+    val hasValidDuration = when (rawDuration) {
+        is Int -> rawDuration > 0
+        is Long -> rawDuration > 0L && rawDuration <= Int.MAX_VALUE
+        else -> false
+    }
+    if (!hasValidDuration) {
+        missingOrInvalid.add("durationMinutes (must be positive integer)")
+    }
+
+    // 3. Strict non-empty missions array of non-empty strings (reject singular "mission")
+    val rawMissions = rawJson.opt("missions")
+    var hasValidMissions = false
+    if (rawMissions is JSONArray && rawMissions.length() > 0) {
+        var allStringsValid = true
+        for (i in 0 until rawMissions.length()) {
+            val item = rawMissions.opt(i)
+            if (item !is String || item.trim().isEmpty()) {
+                allStringsValid = false
                 break
             }
         }
+        hasValidMissions = allStringsValid
+    }
+    if (!hasValidMissions) {
+        missingOrInvalid.add("missions (must be non-empty array of non-empty strings)")
     }
 
-    if (hasTitle && hasDuration && hasValidMissions) {
+    if (hasValidTitle && hasValidDuration && hasValidMissions) {
         return MissionValidationResult(
             isValid = true,
-            isFallback = false,
+            isFallbackApplied = false,
+            isMalformed = false,
             statusLabel = "Valid",
             finalMission = rawJson
         )
     }
 
-    val missingFields = mutableListOf<String>()
-    if (!hasTitle) missingFields.add("title")
-    if (!hasDuration) missingFields.add("durationMinutes")
-    if (!hasValidMissions) missingFields.add("missions[]")
-
     return MissionValidationResult(
         isValid = false,
-        isFallback = true,
-        statusLabel = "Fallback",
-        failureReason = "Incomplete schema; missing: ${missingFields.joinToString(", ")}",
+        isFallbackApplied = true,
+        isMalformed = false,
+        statusLabel = "Schema Incomplete (Fallback Applied)",
+        failureReason = "Invalid fields: ${missingOrInvalid.joinToString(", ")}",
         finalMission = getDeterministicFallbackMission()
     )
 }
@@ -140,7 +161,7 @@ private fun validateAndResolveMission(rawJson: JSONObject?): MissionValidationRe
  * Extracts and parses a JSONObject even if surrounded by markdown code fences,
  * conversational preamble, or trailing commentary.
  */
-private fun extractJson(text: String): JSONObject? {
+internal fun extractJson(text: String): JSONObject? {
     var cleaned = text.trim()
     if (cleaned.startsWith("```json")) {
         cleaned = cleaned.removePrefix("```json").trim()
@@ -218,8 +239,8 @@ fun DemoScreen(llmProvider: LlmProvider) {
         benchJob = scope.launch(Dispatchers.IO) {
             llmProvider.setThreads(selectedThreads)
             var validCount = 0
-            var fallbackCount = 0
-            var invalidCount = 0
+            var malformedCount = 0
+            var schemaFallbackCount = 0
             var completedIters = 0
 
             var totalTokens = 0L
@@ -274,10 +295,10 @@ fun DemoScreen(llmProvider: LlmProvider) {
                     val res = validatedResult!!
                     if (res.isValid) {
                         validCount++
-                    } else if (res.isFallback) {
-                        fallbackCount++
+                    } else if (res.isMalformed) {
+                        malformedCount++
                     } else {
-                        invalidCount++
+                        schemaFallbackCount++
                     }
 
                     val iterMs = System.currentTimeMillis() - iterStart
@@ -292,7 +313,7 @@ fun DemoScreen(llmProvider: LlmProvider) {
                     Log.d("TrailQuest/Raw", "Iter $i raw output:\n$currentText")
                     Log.d("TrailQuest/Schema", "Iter $i status: ${res.statusLabel} | final json: ${res.finalMission}")
 
-                    val statusSymbol = if (res.isValid) "✓ (Valid)" else if (res.isFallback) "~ (Fallback)" else "✗ (Invalid)"
+                    val statusSymbol = if (res.isValid) "✓ (Valid)" else if (res.isMalformed) "✗ (Malformed -> Fallback)" else "~ (Schema -> Fallback)"
                     val missionTitle = res.finalMission.optString("title", "No Title")
                     val iterLine = "Iter $i: ${iterMs}ms | tokens=$tokenCount | t/s=${"%.1f".format(tokPerSec)} | TTFT=${ftMs}ms | $statusSymbol [\"$missionTitle\"]\n"
                     Log.i("TrailQuest/Bench", iterLine.trim())
@@ -321,20 +342,22 @@ fun DemoScreen(llmProvider: LlmProvider) {
             val avgFirstMs = if (completedIters > 0) totalFirstTokenMs / completedIters else 0L
             val avgTokens = if (completedIters > 0) totalTokens.toDouble() / completedIters else 0.0
             val avgGenMs = if (completedIters > 0) totalGenMs / completedIters else 0L
+            val totalFallbacks = malformedCount + schemaFallbackCount
 
             val summary = buildString {
                 append("\n========================================\n")
                 append("--- Benchmark Results ($completedIters / $totalIterations completed, ${selectedThreads}T) ---\n")
                 append("========================================\n")
-                append("Valid missions      : $validCount / $totalIterations\n")
-                append("Fallback missions   : $fallbackCount / $totalIterations\n")
-                append("Invalid (malformed) : $invalidCount / $totalIterations\n")
-                append("Avg generation time : ${avgGenMs} ms\n")
-                append("Avg first-token     : ${avgFirstMs} ms\n")
-                append("Avg throughput      : ${"%.2f".format(avgTps)} tok/s\n")
-                append("Avg token count     : ${"%.1f".format(avgTokens)} tokens\n")
-                append("Total tokens        : $totalTokens\n")
-                append("Total wall time     : ${wallMs} ms\n")
+                append("Valid missions (model)   : $validCount / $totalIterations\n")
+                append("Malformed output (JSON)  : $malformedCount / $totalIterations\n")
+                append("Schema incomplete (JSON) : $schemaFallbackCount / $totalIterations\n")
+                append("Deterministic fallbacks  : $totalFallbacks / $totalIterations\n")
+                append("Avg generation time      : ${avgGenMs} ms\n")
+                append("Avg first-token          : ${avgFirstMs} ms\n")
+                append("Avg throughput           : ${"%.2f".format(avgTps)} tok/s\n")
+                append("Avg token count          : ${"%.1f".format(avgTokens)} tokens\n")
+                append("Total tokens             : $totalTokens\n")
+                append("Total wall time          : ${wallMs} ms\n")
                 append("========================================\n")
             }
             Log.i("TrailQuest/Bench", summary)
