@@ -206,7 +206,7 @@ class LocalGemmaProviderTest {
 
         // Cleanup before loading must NOT call engine.cleanUp() and must NOT throw
         provider.cleanup()
-        delay(50)
+        provider.awaitCleanup()
         assertEquals(0, fakeEngine.cleanUpCallCount)
     }
 
@@ -250,5 +250,139 @@ class LocalGemmaProviderTest {
         provider.cleanup()
 
         provider.runTransaction(prompt = "Prompt after close")
+    }
+
+    @Test
+    fun getRecommendedThreads_returnsCachedValueEvenAfterClosure() {
+        val fakeEngine = FakeInferenceEngine()
+        val provider = LocalGemmaProvider(fakeEngine)
+        assertEquals(4, provider.getRecommendedThreads())
+        provider.cleanup()
+        assertTrue(provider.isClosed())
+        assertEquals(4, provider.getRecommendedThreads())
+    }
+
+    @Test
+    fun repeatedAndConcurrentCleanup_runsAtMostOnce() = runTest {
+        val fakeEngine = FakeInferenceEngine()
+        val provider = LocalGemmaProvider(fakeEngine)
+        provider.loadModel("test-model.gguf")
+        assertEquals(InferenceEngine.State.ModelReady, fakeEngine.state.value)
+
+        val j1 = launch(Dispatchers.Default) { provider.cleanup() }
+        val j2 = launch(Dispatchers.Default) { provider.cleanup() }
+        val j3 = launch(Dispatchers.Default) { provider.cleanup() }
+        j1.join()
+        j2.join()
+        j3.join()
+        provider.awaitCleanup()
+
+        assertTrue(provider.isClosed())
+        assertEquals("cleanUp must be called at most once", 1, fakeEngine.cleanUpCallCount)
+        assertEquals(InferenceEngine.State.Initialized, fakeEngine.state.value)
+    }
+
+    @Test
+    fun cleanup_inModelReadyAndErrorStates_properlyCleansUp() = runTest {
+        // 1. ModelReady state cleanup
+        val fakeEngine1 = FakeInferenceEngine()
+        val provider1 = LocalGemmaProvider(fakeEngine1)
+        provider1.loadModel("model1.gguf")
+        provider1.cleanup()
+        provider1.awaitCleanup()
+        assertEquals(1, fakeEngine1.cleanUpCallCount)
+        assertEquals(InferenceEngine.State.Initialized, fakeEngine1.state.value)
+
+        // 2. Error state cleanup
+        val fakeEngine2 = FakeInferenceEngine()
+        val provider2 = LocalGemmaProvider(fakeEngine2)
+        fakeEngine2.simulateError()
+        provider2.cleanup()
+        provider2.awaitCleanup()
+        assertEquals(1, fakeEngine2.cleanUpCallCount)
+        assertEquals(InferenceEngine.State.Initialized, fakeEngine2.state.value)
+    }
+
+    @Test
+    fun queuedOperation_duringClosure_isRejectedWithoutTouchingEngine() = runTest {
+        val fakeEngine = FakeInferenceEngine()
+        fakeEngine.delayPerTokenMs = 50
+        val provider = LocalGemmaProvider(fakeEngine)
+        provider.loadModel("model.gguf")
+
+        // Start active transaction holding the mutex
+        val txStarted = CompletableDeferred<Unit>()
+        val activeTx = launch(Dispatchers.Default) {
+            txStarted.complete(Unit)
+            provider.runTransaction(prompt = "Active prompt")
+        }
+        txStarted.await()
+        delay(20)
+
+        // Queue a second transaction while active is running
+        var queuedFailedWithClosed = false
+        val queuedTx = launch(Dispatchers.Default) {
+            try {
+                provider.runTransaction(prompt = "Queued prompt")
+            } catch (e: IllegalStateException) {
+                if (e.message?.contains("closed") == true) {
+                    queuedFailedWithClosed = true
+                }
+            }
+        }
+
+        // Trigger cleanup while active is in-flight and queued is waiting for lock
+        delay(10)
+        provider.cleanup()
+        assertTrue(provider.isClosed())
+
+        activeTx.join()
+        queuedTx.join()
+        provider.awaitCleanup()
+
+        assertTrue("Queued transaction must fail with closed state error", queuedFailedWithClosed)
+        assertEquals("cleanUp must eventually execute after active finishes", 1, fakeEngine.cleanUpCallCount)
+    }
+
+    @Test
+    fun generate_rechecksClosedStateAfterAcquiringMutex() = runTest {
+        val fakeEngine = FakeInferenceEngine()
+        fakeEngine.delayPerTokenMs = 50
+        val provider = LocalGemmaProvider(fakeEngine)
+        provider.loadModel("model.gguf")
+
+        // Active transaction holding the lock
+        val activeStarted = CompletableDeferred<Unit>()
+        val activeTx = launch(Dispatchers.Default) {
+            activeStarted.complete(Unit)
+            provider.runTransaction(prompt = "Hold lock")
+        }
+        activeStarted.await()
+        delay(20)
+
+        // Launch generate which will wait on engineMutex
+        var generateFailedWithClosed = false
+        val generateJob = launch(Dispatchers.Default) {
+            try {
+                provider.generate("Generate prompt").collect {}
+            } catch (e: IllegalStateException) {
+                if (e.message?.contains("closed") == true) {
+                    generateFailedWithClosed = true
+                }
+            }
+        }
+
+        delay(10)
+        // Cleanup requested while generate is queued
+        provider.cleanup()
+        assertTrue(provider.isClosed())
+
+        activeTx.join()
+        generateJob.join()
+        provider.awaitCleanup()
+
+        assertTrue("Generate must fail closed check after obtaining lock", generateFailedWithClosed)
+        // engine.sendUserPrompt should have only run once (for activeTx, not for generate)
+        assertEquals(1, fakeEngine.resetContextCallCount)
     }
 }

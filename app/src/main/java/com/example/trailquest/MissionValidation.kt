@@ -488,9 +488,48 @@ internal fun validateAndResolveMission(
                 .lowercase()
 
             val isContradictory = when (expectedConfig.activity) {
-                ExpeditionActivity.WALK -> combinedTasks.contains("sprint at full speed") || combinedTasks.contains("run 5k")
-                ExpeditionActivity.NATURE_EXPLORE -> combinedTasks.contains("sprint") || combinedTasks.contains("run at maximum pace")
-                else -> false
+                ExpeditionActivity.WALK -> {
+                    combinedTasks.contains("sprint at full speed") ||
+                        combinedTasks.contains("sprint at maximum pace") ||
+                        combinedTasks.contains("sprint intervals") ||
+                        combinedTasks.contains("run 5k") ||
+                        combinedTasks.contains("run at maximum pace") ||
+                        combinedTasks.contains("run continuously") ||
+                        combinedTasks.contains("ride a bike") ||
+                        combinedTasks.contains("bicycle") ||
+                        combinedTasks.contains("cycling")
+                }
+                ExpeditionActivity.HIKE -> {
+                    combinedTasks.contains("sprint at full speed") ||
+                        combinedTasks.contains("sprint at maximum pace") ||
+                        combinedTasks.contains("sprint intervals") ||
+                        combinedTasks.contains("ride a bike") ||
+                        combinedTasks.contains("bicycle") ||
+                        combinedTasks.contains("cycling") ||
+                        combinedTasks.contains("treadmill") ||
+                        combinedTasks.contains("stationary bike") ||
+                        combinedTasks.contains("gym workout")
+                }
+                ExpeditionActivity.RUN -> {
+                    combinedTasks.contains("do not run") ||
+                        combinedTasks.contains("avoid running") ||
+                        combinedTasks.contains("refrain from running") ||
+                        combinedTasks.contains("only walk without running") ||
+                        combinedTasks.contains("walk instead of running") ||
+                        combinedTasks.contains("ride a bike") ||
+                        combinedTasks.contains("bicycle") ||
+                        combinedTasks.contains("cycling") ||
+                        combinedTasks.contains("swim laps")
+                }
+                ExpeditionActivity.NATURE_EXPLORE -> {
+                    combinedTasks.contains("sprint") ||
+                        combinedTasks.contains("run at maximum pace") ||
+                        combinedTasks.contains("run at full speed") ||
+                        combinedTasks.contains("run 5k") ||
+                        combinedTasks.contains("ride a bike") ||
+                        combinedTasks.contains("bicycle") ||
+                        combinedTasks.contains("cycling")
+                }
             }
             if (isContradictory) {
                 missingOrInvalid.add("missions contain tasks contradictory to ${expectedConfig.activity.title}")

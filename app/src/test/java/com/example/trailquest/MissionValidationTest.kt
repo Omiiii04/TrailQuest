@@ -505,4 +505,215 @@ class MissionValidationTest {
             }
         }
     }
+
+    @Test
+    fun walkRequest_withIncompatibleRunningOrSprintObjective_triggersFallback() {
+        val config = com.example.trailquest.ui.setup.ExpeditionConfig(
+            activity = com.example.trailquest.ui.setup.ExpeditionActivity.WALK,
+            durationMinutes = 30,
+            difficulty = com.example.trailquest.ui.setup.ExpeditionDifficulty.MODERATE
+        )
+
+        // Sprinting contradiction
+        val jsonSprint = JSONObject().apply {
+            put("title", "Speed Workout")
+            put("activity", "Walk")
+            put("durationMinutes", 30)
+            put("difficulty", "Moderate")
+            put("missions", JSONArray().apply {
+                put("Warm up for 5 minutes.")
+                put("Sprint at full speed across the field.")
+            })
+        }
+        val resultSprint = validateAndResolveMission(jsonSprint, config)
+        assertFalse("Walk with sprint must fail validation", resultSprint.isValid)
+        assertTrue(resultSprint.isFallbackApplied)
+        assertTrue(resultSprint.failureReason!!.contains("contradictory to Walk"))
+
+        // Cycling contradiction
+        val jsonCycling = JSONObject().apply {
+            put("title", "Bike Trail")
+            put("activity", "Walk")
+            put("durationMinutes", 30)
+            put("difficulty", "Moderate")
+            put("missions", JSONArray().apply {
+                put("Ride a bike along the sidewalk for 30 minutes.")
+            })
+        }
+        val resultCycling = validateAndResolveMission(jsonCycling, config)
+        assertFalse("Walk with cycling must fail validation", resultCycling.isValid)
+        assertTrue(resultCycling.isFallbackApplied)
+        assertTrue(resultCycling.failureReason!!.contains("contradictory to Walk"))
+    }
+
+    @Test
+    fun hikeRequest_withIncompatibleObjective_triggersFallback() {
+        val config = com.example.trailquest.ui.setup.ExpeditionConfig(
+            activity = com.example.trailquest.ui.setup.ExpeditionActivity.HIKE,
+            durationMinutes = 30,
+            difficulty = com.example.trailquest.ui.setup.ExpeditionDifficulty.MODERATE
+        )
+
+        // Cycling contradiction on trail
+        val jsonBicycle = JSONObject().apply {
+            put("title", "Trail Bike Tour")
+            put("activity", "Hike")
+            put("durationMinutes", 30)
+            put("difficulty", "Moderate")
+            put("missions", JSONArray().apply {
+                put("Ride a bike along the dirt paths.")
+                put("Check bicycle tire pressure at the summit.")
+            })
+        }
+        val resultBike = validateAndResolveMission(jsonBicycle, config)
+        assertFalse("Hike with bicycle must fail validation", resultBike.isValid)
+        assertTrue(resultBike.isFallbackApplied)
+        assertTrue(resultBike.failureReason!!.contains("contradictory to Hike"))
+
+        // Indoor gym treadmill contradiction
+        val jsonTreadmill = JSONObject().apply {
+            put("title", "Indoor Hike")
+            put("activity", "Hike")
+            put("durationMinutes", 30)
+            put("difficulty", "Moderate")
+            put("missions", JSONArray().apply {
+                put("Walk on a treadmill incline at the gym.")
+            })
+        }
+        val resultTreadmill = validateAndResolveMission(jsonTreadmill, config)
+        assertFalse("Hike on treadmill must fail validation", resultTreadmill.isValid)
+        assertTrue(resultTreadmill.isFallbackApplied)
+        assertTrue(resultTreadmill.failureReason!!.contains("contradictory to Hike"))
+    }
+
+    @Test
+    fun runRequest_withIncompatibleObjective_triggersFallback() {
+        val config = com.example.trailquest.ui.setup.ExpeditionConfig(
+            activity = com.example.trailquest.ui.setup.ExpeditionActivity.RUN,
+            durationMinutes = 30,
+            difficulty = com.example.trailquest.ui.setup.ExpeditionDifficulty.MODERATE
+        )
+
+        // Explicit "do not run" contradiction
+        val jsonNoRun = JSONObject().apply {
+            put("title", "Relaxed Day")
+            put("activity", "Run")
+            put("durationMinutes", 30)
+            put("difficulty", "Moderate")
+            put("missions", JSONArray().apply {
+                put("Do not run today; rest your legs.")
+                put("Take a calm seated pause outside.")
+            })
+        }
+        val resultNoRun = validateAndResolveMission(jsonNoRun, config)
+        assertFalse("Run with 'do not run' must fail validation", resultNoRun.isValid)
+        assertTrue(resultNoRun.isFallbackApplied)
+        assertTrue(resultNoRun.failureReason!!.contains("contradictory to Run"))
+
+        // Cycling contradiction
+        val jsonCycling = JSONObject().apply {
+            put("title", "Cycling Session")
+            put("activity", "Run")
+            put("durationMinutes", 30)
+            put("difficulty", "Moderate")
+            put("missions", JSONArray().apply {
+                put("Go cycling down the main avenue.")
+            })
+        }
+        val resultCycling = validateAndResolveMission(jsonCycling, config)
+        assertFalse("Run with cycling must fail validation", resultCycling.isValid)
+        assertTrue(resultCycling.isFallbackApplied)
+        assertTrue(resultCycling.failureReason!!.contains("contradictory to Run"))
+    }
+
+    @Test
+    fun natureExploreRequest_withIncompatibleHighIntensityRunningObjective_triggersFallback() {
+        val config = com.example.trailquest.ui.setup.ExpeditionConfig(
+            activity = com.example.trailquest.ui.setup.ExpeditionActivity.NATURE_EXPLORE,
+            durationMinutes = 30,
+            difficulty = com.example.trailquest.ui.setup.ExpeditionDifficulty.EASY
+        )
+
+        // Sprinting contradiction in Nature Explore
+        val jsonSprint = JSONObject().apply {
+            put("title", "Nature Sprint")
+            put("activity", "Nature Explore")
+            put("durationMinutes", 30)
+            put("difficulty", "Easy")
+            put("missions", JSONArray().apply {
+                put("Sprint through the botanical garden.")
+                put("Run at maximum pace past the trees.")
+            })
+        }
+        val resultSprint = validateAndResolveMission(jsonSprint, config)
+        assertFalse("Nature explore with sprint must fail validation", resultSprint.isValid)
+        assertTrue(resultSprint.isFallbackApplied)
+        assertTrue(resultSprint.failureReason!!.contains("contradictory to Nature Explore"))
+    }
+
+    @Test
+    fun validTasks_withReasonableSecondaryActions_passValidation() {
+        // Run with walking warmup and cooldown is normal and MUST pass
+        val runConfig = com.example.trailquest.ui.setup.ExpeditionConfig(
+            activity = com.example.trailquest.ui.setup.ExpeditionActivity.RUN,
+            durationMinutes = 30,
+            difficulty = com.example.trailquest.ui.setup.ExpeditionDifficulty.MODERATE
+        )
+        val validRunJson = JSONObject().apply {
+            put("title", "Interval Run")
+            put("activity", "Run")
+            put("durationMinutes", 30)
+            put("difficulty", "Moderate")
+            put("missions", JSONArray().apply {
+                put("Warm up with 5 minutes of brisk walking.")
+                put("Run at a steady tempo for 20 minutes.")
+                put("Cool down with 5 minutes of gentle walking.")
+            })
+        }
+        val runResult = validateAndResolveMission(validRunJson, runConfig)
+        assertTrue("Run with walking warmup/cooldown must be valid", runResult.isValid)
+        assertFalse(runResult.isFallbackApplied)
+
+        // Walk with brief nature observation is normal and MUST pass
+        val walkConfig = com.example.trailquest.ui.setup.ExpeditionConfig(
+            activity = com.example.trailquest.ui.setup.ExpeditionActivity.WALK,
+            durationMinutes = 30,
+            difficulty = com.example.trailquest.ui.setup.ExpeditionDifficulty.EASY
+        )
+        val validWalkJson = JSONObject().apply {
+            put("title", "Park Walk")
+            put("activity", "Walk")
+            put("durationMinutes", 30)
+            put("difficulty", "Easy")
+            put("missions", JSONArray().apply {
+                put("Walk at a leisurely pace for 15 minutes.")
+                put("Pause briefly to observe local flowering plants.")
+                put("Walk the remaining 15 minutes along the paved loop.")
+            })
+        }
+        val walkResult = validateAndResolveMission(validWalkJson, walkConfig)
+        assertTrue("Walk with observation pause must be valid", walkResult.isValid)
+        assertFalse(walkResult.isFallbackApplied)
+
+        // Hike with viewpoint rest is normal and MUST pass
+        val hikeConfig = com.example.trailquest.ui.setup.ExpeditionConfig(
+            activity = com.example.trailquest.ui.setup.ExpeditionActivity.HIKE,
+            durationMinutes = 30,
+            difficulty = com.example.trailquest.ui.setup.ExpeditionDifficulty.CHALLENGING
+        )
+        val validHikeJson = JSONObject().apply {
+            put("title", "Ridge Ascent Hike")
+            put("activity", "Hike")
+            put("durationMinutes", 30)
+            put("difficulty", "Challenging")
+            put("missions", JSONArray().apply {
+                put("Hike up the rocky trail grade for 15 minutes.")
+                put("Take a 2-minute breath at the overlook to check your route.")
+                put("Hike 13 minutes down the descent path with sure footing.")
+            })
+        }
+        val hikeResult = validateAndResolveMission(validHikeJson, hikeConfig)
+        assertTrue("Hike with viewpoint rest must be valid", hikeResult.isValid)
+        assertFalse(hikeResult.isFallbackApplied)
+    }
 }

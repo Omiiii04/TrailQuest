@@ -16,7 +16,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private var _llmProvider: LlmProvider? = null
 
     fun getOrCreateLlmProvider(): LlmProvider {
-        if (_llmProvider == null) {
+        val current = _llmProvider
+        if (current == null || (current is LocalGemmaProvider && current.isClosed())) {
             _llmProvider = LocalGemmaProvider(getApplication<Application>())
         }
         return _llmProvider!!
@@ -27,6 +28,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         super.onCleared()
         _llmProvider?.cleanup()
+        _llmProvider = null
     }
 }
 
