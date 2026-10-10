@@ -4,6 +4,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -333,5 +334,175 @@ class MissionValidationTest {
         )
 
         assertFalse("Fallback mission must NEVER be labeled as AI-generated", plan.isAiGenerated)
+    }
+
+    @Test
+    fun missingActivity_inExpeditionMode_triggersFallback() {
+        val jsonNoActivity = JSONObject().apply {
+            put("title", "Walk Mission")
+            put("durationMinutes", 30)
+            put("difficulty", "Moderate")
+            put("missions", JSONArray().apply {
+                put("Walk at a brisk pace.")
+                put("Return home.")
+            })
+        }
+        val config = com.example.trailquest.ui.setup.ExpeditionConfig(
+            activity = com.example.trailquest.ui.setup.ExpeditionActivity.WALK,
+            durationMinutes = 30,
+            difficulty = com.example.trailquest.ui.setup.ExpeditionDifficulty.MODERATE
+        )
+        val result = validateAndResolveMission(jsonNoActivity, config)
+        assertFalse("Missing activity must fail expedition validation", result.isValid)
+        assertTrue(result.isFallbackApplied)
+        assertEquals("Walk", result.finalMission.getString("activity"))
+        assertEquals("Moderate", result.finalMission.getString("difficulty"))
+    }
+
+    @Test
+    fun missingDifficulty_inExpeditionMode_triggersFallback() {
+        val jsonNoDifficulty = JSONObject().apply {
+            put("title", "Walk Mission")
+            put("activity", "Walk")
+            put("durationMinutes", 30)
+            put("missions", JSONArray().apply {
+                put("Walk at a brisk pace.")
+                put("Return home.")
+            })
+        }
+        val config = com.example.trailquest.ui.setup.ExpeditionConfig(
+            activity = com.example.trailquest.ui.setup.ExpeditionActivity.WALK,
+            durationMinutes = 30,
+            difficulty = com.example.trailquest.ui.setup.ExpeditionDifficulty.MODERATE
+        )
+        val result = validateAndResolveMission(jsonNoDifficulty, config)
+        assertFalse("Missing difficulty must fail expedition validation", result.isValid)
+        assertTrue(result.isFallbackApplied)
+        assertEquals("Walk", result.finalMission.getString("activity"))
+        assertEquals("Moderate", result.finalMission.getString("difficulty"))
+    }
+
+    @Test
+    fun emptyOrNonStringActivityAndDifficulty_triggersFallback() {
+        val config = com.example.trailquest.ui.setup.ExpeditionConfig(
+            activity = com.example.trailquest.ui.setup.ExpeditionActivity.HIKE,
+            durationMinutes = 15,
+            difficulty = com.example.trailquest.ui.setup.ExpeditionDifficulty.EASY
+        )
+
+        // Non-string activity
+        val jsonNumberActivity = JSONObject().apply {
+            put("title", "Hike Mission")
+            put("activity", 123)
+            put("durationMinutes", 15)
+            put("difficulty", "Easy")
+            put("missions", JSONArray().apply { put("Step 1"); put("Step 2") })
+        }
+        val res1 = validateAndResolveMission(jsonNumberActivity, config)
+        assertFalse("Number activity must fail", res1.isValid)
+        assertTrue(res1.isFallbackApplied)
+
+        // Empty string activity
+        val jsonEmptyActivity = JSONObject().apply {
+            put("title", "Hike Mission")
+            put("activity", "   ")
+            put("durationMinutes", 15)
+            put("difficulty", "Easy")
+            put("missions", JSONArray().apply { put("Step 1"); put("Step 2") })
+        }
+        val res2 = validateAndResolveMission(jsonEmptyActivity, config)
+        assertFalse("Blank activity must fail", res2.isValid)
+        assertTrue(res2.isFallbackApplied)
+
+        // Non-string difficulty
+        val jsonBooleanDifficulty = JSONObject().apply {
+            put("title", "Hike Mission")
+            put("activity", "Hike")
+            put("durationMinutes", 15)
+            put("difficulty", true)
+            put("missions", JSONArray().apply { put("Step 1"); put("Step 2") })
+        }
+        val res3 = validateAndResolveMission(jsonBooleanDifficulty, config)
+        assertFalse("Boolean difficulty must fail", res3.isValid)
+        assertTrue(res3.isFallbackApplied)
+
+        // Empty string difficulty
+        val jsonEmptyDifficulty = JSONObject().apply {
+            put("title", "Hike Mission")
+            put("activity", "Hike")
+            put("durationMinutes", 15)
+            put("difficulty", "")
+            put("missions", JSONArray().apply { put("Step 1"); put("Step 2") })
+        }
+        val res4 = validateAndResolveMission(jsonEmptyDifficulty, config)
+        assertFalse("Blank difficulty must fail", res4.isValid)
+        assertTrue(res4.isFallbackApplied)
+    }
+
+    @Test
+    fun caseInsensitiveActivityAndDifficulty_isAccepted() {
+        val jsonCase = JSONObject().apply {
+            put("title", "Hike Mission")
+            put("activity", "hike")
+            put("durationMinutes", 30)
+            put("difficulty", "MODERATE")
+            put("missions", JSONArray().apply {
+                put("Follow a mountain trail for 15 minutes.")
+                put("Return along the same path.")
+            })
+        }
+        val config = com.example.trailquest.ui.setup.ExpeditionConfig(
+            activity = com.example.trailquest.ui.setup.ExpeditionActivity.HIKE,
+            durationMinutes = 30,
+            difficulty = com.example.trailquest.ui.setup.ExpeditionDifficulty.MODERATE
+        )
+        val result = validateAndResolveMission(jsonCase, config)
+        assertTrue("Case-insensitive activity and difficulty must be accepted", result.isValid)
+        assertFalse(result.isFallbackApplied)
+    }
+
+    @Test
+    fun benchmarkMode_withoutExpectedConfig_acceptsThreeFieldJson() {
+        val benchJson = JSONObject().apply {
+            put("title", "Walking Mission")
+            put("durationMinutes", 30)
+            put("missions", JSONArray().apply {
+                put("Walk for 30 minutes")
+            })
+        }
+        // When expectedConfig == null, activity and difficulty are not required, single task is accepted
+        val result = validateAndResolveMission(benchJson, null)
+        assertTrue("Benchmark JSON must pass when expectedConfig is null", result.isValid)
+        assertFalse(result.isFallbackApplied)
+        assertEquals("Walking Mission", result.finalMission.getString("title"))
+        assertEquals(30, result.finalMission.getInt("durationMinutes"))
+    }
+
+    @Test
+    fun differentDifficulties_produceDifferentTaskContent_forAllThirtySixConfigurations() {
+        for (activity in com.example.trailquest.ui.setup.ExpeditionActivity.entries) {
+            for (duration in com.example.trailquest.ui.setup.SUPPORTED_DURATIONS) {
+                val easy = getDeterministicFallbackMission(com.example.trailquest.ui.setup.ExpeditionConfig(activity, duration, com.example.trailquest.ui.setup.ExpeditionDifficulty.EASY))
+                val moderate = getDeterministicFallbackMission(com.example.trailquest.ui.setup.ExpeditionConfig(activity, duration, com.example.trailquest.ui.setup.ExpeditionDifficulty.MODERATE))
+                val challenging = getDeterministicFallbackMission(com.example.trailquest.ui.setup.ExpeditionConfig(activity, duration, com.example.trailquest.ui.setup.ExpeditionDifficulty.CHALLENGING))
+
+                val easyTasks = (0 until easy.getJSONArray("missions").length()).map { easy.getJSONArray("missions").getString(it) }
+                val modTasks = (0 until moderate.getJSONArray("missions").length()).map { moderate.getJSONArray("missions").getString(it) }
+                val hardTasks = (0 until challenging.getJSONArray("missions").length()).map { challenging.getJSONArray("missions").getString(it) }
+
+                assertNotEquals(
+                    "Easy and Moderate tasks must differ for $activity at $duration min",
+                    easyTasks, modTasks
+                )
+                assertNotEquals(
+                    "Moderate and Challenging tasks must differ for $activity at $duration min",
+                    modTasks, hardTasks
+                )
+                assertNotEquals(
+                    "Easy and Challenging tasks must differ for $activity at $duration min",
+                    easyTasks, hardTasks
+                )
+            }
+        }
     }
 }

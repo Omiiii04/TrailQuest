@@ -209,4 +209,46 @@ class LocalGemmaProviderTest {
         delay(50)
         assertEquals(0, fakeEngine.cleanUpCallCount)
     }
+
+    @Test
+    fun setThreads_and_resetContext_participateInMutexSynchronization() = runTest {
+        val fakeEngine = FakeInferenceEngine()
+        val provider = LocalGemmaProvider(fakeEngine)
+        provider.loadModel("model.gguf")
+
+        provider.setThreads(6)
+        assertEquals(6, fakeEngine.activeThreads)
+
+        provider.resetContext()
+        assertEquals(1, fakeEngine.resetContextCallCount)
+    }
+
+    @Test
+    fun earlyStop_via_onToken_restoresModelReady_andAllowsImmediateReuse() = runTest {
+        val fakeEngine = FakeInferenceEngine()
+        val provider = LocalGemmaProvider(fakeEngine)
+        provider.loadModel("model.gguf")
+
+        // First transaction with early stop condition
+        val earlyResult = provider.runTransaction(
+            prompt = "Short prompt",
+            onToken = { token, _ -> token.contains("title") }
+        )
+        assertTrue(earlyResult.isNotEmpty())
+        assertTrue("Engine must be in ModelReady after early stop", fakeEngine.state.value is InferenceEngine.State.ModelReady)
+
+        // Immediate subsequent transaction must succeed without deadlock or state error
+        val secondResult = provider.runTransaction(prompt = "Second prompt")
+        assertTrue(secondResult.isNotEmpty())
+        assertTrue("Engine must be in ModelReady after second transaction", fakeEngine.state.value is InferenceEngine.State.ModelReady)
+    }
+
+    @Test(expected = IllegalStateException::class)
+    fun operations_after_cleanup_are_rejected() = runTest {
+        val fakeEngine = FakeInferenceEngine()
+        val provider = LocalGemmaProvider(fakeEngine)
+        provider.cleanup()
+
+        provider.runTransaction(prompt = "Prompt after close")
+    }
 }

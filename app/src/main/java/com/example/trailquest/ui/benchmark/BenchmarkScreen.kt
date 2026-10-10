@@ -329,7 +329,7 @@ fun DemoScreen(
                 Button(
                     onClick = {
                         selectedThreads = t
-                        llmProvider.setThreads(t)
+                        scope.launch { llmProvider.setThreads(t) }
                     },
                     colors = if (selectedThreads == t) ButtonDefaults.buttonColors() else ButtonDefaults.filledTonalButtonColors(),
                     enabled = !isRunning,

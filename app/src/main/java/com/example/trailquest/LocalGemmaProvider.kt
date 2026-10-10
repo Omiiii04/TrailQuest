@@ -49,6 +49,9 @@ class LocalGemmaProvider internal constructor(
 
     override suspend fun setSystemPrompt(prompt: String) = engineMutex.withLock {
         check(!isClosed) { "LocalGemmaProvider is closed" }
+        check(engine.state.value is InferenceEngine.State.ModelReady) {
+            "Cannot set system prompt in ${engine.state.value}"
+        }
         engine.setSystemPrompt(prompt)
     }
 
@@ -60,6 +63,9 @@ class LocalGemmaProvider internal constructor(
                 emit(token)
             }
         } finally {
+            if (engine.state.value is InferenceEngine.State.Generating) {
+                engine.resetContext()
+            }
             engineMutex.unlock()
         }
     }
@@ -94,24 +100,33 @@ class LocalGemmaProvider internal constructor(
                 }
             }
         } catch (_: JsonCompleteException) {
-            // Early-stop condition satisfied (e.g., valid closing JSON brace)
+            // Early-stop condition satisfied; flow cancelled and state restored to ModelReady
+        } finally {
+            if (engine.state.value is InferenceEngine.State.Generating) {
+                engine.resetContext()
+            }
         }
         return@withLock accumulated
     }
 
     override suspend fun benchmark(): String = engineMutex.withLock {
         check(!isClosed) { "LocalGemmaProvider is closed" }
+        check(engine.state.value is InferenceEngine.State.ModelReady) {
+            "Cannot run benchmark in ${engine.state.value}"
+        }
         engine.bench(512, 128, 1, 1)
     }
 
-    override fun resetContext() {
-        if (!isClosed && engine.state.value is InferenceEngine.State.ModelReady) {
+    override suspend fun resetContext() = engineMutex.withLock {
+        check(!isClosed) { "LocalGemmaProvider is closed" }
+        if (engine.state.value is InferenceEngine.State.ModelReady) {
             engine.resetContext()
         }
     }
 
-    override fun setThreads(threads: Int) {
-        if (!isClosed && engine.state.value is InferenceEngine.State.ModelReady) {
+    override suspend fun setThreads(threads: Int) = engineMutex.withLock {
+        check(!isClosed) { "LocalGemmaProvider is closed" }
+        if (engine.state.value is InferenceEngine.State.ModelReady) {
             engine.setThreads(threads)
         }
     }

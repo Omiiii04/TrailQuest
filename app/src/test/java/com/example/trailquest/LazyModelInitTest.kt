@@ -22,8 +22,8 @@ class LazyModelInitTest {
         override suspend fun setSystemPrompt(prompt: String) {}
         override fun generate(prompt: String): Flow<String> = emptyFlow()
         override suspend fun benchmark(): String = "bench"
-        override fun resetContext() {}
-        override fun setThreads(threads: Int) {}
+        override suspend fun resetContext() {}
+        override suspend fun setThreads(threads: Int) {}
         override fun getRecommendedThreads(): Int = 4
         override fun cleanup() {
             isCleanedUp = true

@@ -20,8 +20,8 @@ class MissionGenerationFlowTest {
         override suspend fun setSystemPrompt(prompt: String) {}
         override fun generate(prompt: String) = kotlinx.coroutines.flow.emptyFlow<String>()
         override suspend fun benchmark(): String = "bench"
-        override fun resetContext() {}
-        override fun setThreads(threads: Int) {}
+        override suspend fun resetContext() {}
+        override suspend fun setThreads(threads: Int) {}
         override fun getRecommendedThreads(): Int = 4
         override fun cleanup() {}
 
