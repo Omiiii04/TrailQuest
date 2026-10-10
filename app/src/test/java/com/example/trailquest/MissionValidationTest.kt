@@ -227,4 +227,111 @@ class MissionValidationTest {
         assertEquals(30, result.finalMission.getInt("durationMinutes"))
         assertEquals(3, result.finalMission.getJSONArray("missions").length())
     }
+
+    @Test
+    fun durationMismatch_withExpectedConfig_isRejectedAndTriggersFallback() {
+        val jsonMismatched = JSONObject().apply {
+            put("title", "Park Walk")
+            put("durationMinutes", 15) // Does not match expected 30
+            put("missions", JSONArray().apply { put("Walk for 15 minutes") })
+        }
+        val expectedConfig = com.example.trailquest.ui.setup.ExpeditionConfig(
+            activity = com.example.trailquest.ui.setup.ExpeditionActivity.WALK,
+            durationMinutes = 30,
+            difficulty = com.example.trailquest.ui.setup.ExpeditionDifficulty.EASY
+        )
+
+        val result = validateAndResolveMission(jsonMismatched, expectedConfig)
+
+        assertFalse("Duration mismatch must be rejected", result.isValid)
+        assertTrue(result.isFallbackApplied)
+        assertTrue(result.failureReason!!.contains("durationMinutes"))
+        // Fallback mission must match the requested 30 minutes
+        assertEquals(30, result.finalMission.getInt("durationMinutes"))
+    }
+
+    @Test
+    fun activityMismatch_withExpectedConfig_isRejectedAndTriggersFallback() {
+        val jsonWrongActivity = JSONObject().apply {
+            put("title", "Road Run")
+            put("activity", "Run")
+            put("durationMinutes", 30)
+            put("missions", JSONArray().apply { put("Run 5k") })
+        }
+        val expectedConfig = com.example.trailquest.ui.setup.ExpeditionConfig(
+            activity = com.example.trailquest.ui.setup.ExpeditionActivity.HIKE,
+            durationMinutes = 30,
+            difficulty = com.example.trailquest.ui.setup.ExpeditionDifficulty.MODERATE
+        )
+
+        val result = validateAndResolveMission(jsonWrongActivity, expectedConfig)
+
+        assertFalse("Activity mismatch must be rejected", result.isValid)
+        assertTrue(result.isFallbackApplied)
+        assertEquals("Hike", result.finalMission.getString("activity"))
+    }
+
+    @Test
+    fun emptyModelResponse_handledWithFallback() {
+        val emptyText = ""
+        val parsed = extractJson(emptyText)
+        assertNull(parsed)
+
+        val expectedConfig = com.example.trailquest.ui.setup.ExpeditionConfig(
+            activity = com.example.trailquest.ui.setup.ExpeditionActivity.NATURE_EXPLORE,
+            durationMinutes = 15,
+            difficulty = com.example.trailquest.ui.setup.ExpeditionDifficulty.EASY
+        )
+
+        val result = validateAndResolveMission(parsed, expectedConfig)
+
+        assertFalse(result.isValid)
+        assertTrue(result.isFallbackApplied)
+        assertTrue(result.isMalformed)
+        assertEquals("Nature Explore", result.finalMission.getString("activity"))
+        assertEquals(15, result.finalMission.getInt("durationMinutes"))
+    }
+
+    @Test
+    fun allThirtySixConfigurations_produceValidTailoredFallbacks() {
+        for (activity in com.example.trailquest.ui.setup.ExpeditionActivity.entries) {
+            for (duration in com.example.trailquest.ui.setup.SUPPORTED_DURATIONS) {
+                for (difficulty in com.example.trailquest.ui.setup.ExpeditionDifficulty.entries) {
+                    val config = com.example.trailquest.ui.setup.ExpeditionConfig(activity, duration, difficulty)
+                    val fallbackJson = getDeterministicFallbackMission(config)
+
+                    // Must pass strict validation for this specific configuration
+                    val result = validateAndResolveMission(fallbackJson, config)
+                    assertTrue("Fallback for $config must be valid", result.isValid)
+                    assertFalse(result.isFallbackApplied)
+                    assertEquals(config.durationMinutes, result.finalMission.getInt("durationMinutes"))
+                    assertEquals(config.activity.title, result.finalMission.getString("activity"))
+                    assertEquals(config.difficulty.title, result.finalMission.getString("difficulty"))
+                    assertTrue(result.finalMission.getString("title").isNotBlank())
+
+                    val missions = result.finalMission.getJSONArray("missions")
+                    assertTrue("Missions array for $config must have at least 2 items", missions.length() >= 2)
+                    for (i in 0 until missions.length()) {
+                        assertTrue("Task $i must be non-empty", missions.getString(i).isNotBlank())
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun isAiGenerated_isStrictlyFalseWhenFallbackApplied() {
+        val config = com.example.trailquest.ui.setup.ExpeditionConfig(
+            activity = com.example.trailquest.ui.setup.ExpeditionActivity.WALK,
+            durationMinutes = 30
+        )
+        // Simulate malformed result
+        val fallbackResult = validateAndResolveMission(null, config)
+        val plan = fallbackResult.finalMission.toMissionPlan(
+            config = config,
+            isAiGenerated = fallbackResult.isValid && !fallbackResult.isFallbackApplied
+        )
+
+        assertFalse("Fallback mission must NEVER be labeled as AI-generated", plan.isAiGenerated)
+    }
 }

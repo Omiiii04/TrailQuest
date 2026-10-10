@@ -1,37 +1,119 @@
 package com.example.trailquest
 
 import android.content.Context
+import android.util.Log
 import com.arm.aichat.AiChat
+import com.arm.aichat.InferenceEngine
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
-class LocalGemmaProvider(context: Context) : LlmProvider {
-    private val engine = AiChat.getInferenceEngine(context)
+class LocalGemmaProvider internal constructor(
+    private val engine: InferenceEngine
+) : LlmProvider {
+    constructor(context: Context) : this(AiChat.getInferenceEngine(context))
+
+    private val engineMutex = Mutex()
+    private val providerScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var loadedModelPath: String? = null
+    @Volatile
+    private var isClosed = false
 
     // ponytail: 256 tokens is plenty for a short JSON response; raise if generation is cut short
     private val GENERATE_MAX_TOKENS = 256
 
-    override suspend fun loadModel(path: String) {
-        engine.loadModel(path)
+    override suspend fun loadModel(path: String) = engineMutex.withLock {
+        check(!isClosed) { "LocalGemmaProvider is closed" }
+        if (loadedModelPath == path && engine.state.value is InferenceEngine.State.ModelReady) {
+            return@withLock
+        }
+        try {
+            if (engine.state.value is InferenceEngine.State.Error) {
+                engine.cleanUp() // Resets state from Error back to Initialized
+            } else if (engine.state.value is InferenceEngine.State.ModelReady) {
+                engine.cleanUp() // Unloads previous model back to Initialized
+            }
+            engine.loadModel(path)
+            loadedModelPath = path
+        } catch (e: Exception) {
+            loadedModelPath = null
+            throw e
+        }
     }
 
-    override suspend fun setSystemPrompt(prompt: String) {
+    override suspend fun setSystemPrompt(prompt: String) = engineMutex.withLock {
+        check(!isClosed) { "LocalGemmaProvider is closed" }
         engine.setSystemPrompt(prompt)
     }
 
-    override fun generate(prompt: String): Flow<String> {
-        return engine.sendUserPrompt(prompt, GENERATE_MAX_TOKENS)
+    override fun generate(prompt: String): Flow<String> = flow {
+        check(!isClosed) { "LocalGemmaProvider is closed" }
+        engineMutex.lock()
+        try {
+            engine.sendUserPrompt(prompt, GENERATE_MAX_TOKENS).collect { token ->
+                emit(token)
+            }
+        } finally {
+            engineMutex.unlock()
+        }
     }
 
-    override suspend fun benchmark(): String {
-        return engine.bench(512, 128, 1, 1)
+    override suspend fun runTransaction(
+        prompt: String,
+        systemPrompt: String?,
+        threads: Int?,
+        onToken: ((token: String, accumulated: String) -> Boolean)?
+    ): String = engineMutex.withLock {
+        check(!isClosed) { "LocalGemmaProvider is closed" }
+        check(engine.state.value is InferenceEngine.State.ModelReady) {
+            "Inference engine is not in ModelReady state: ${engine.state.value}"
+        }
+
+        if (threads != null) {
+            engine.setThreads(threads)
+        }
+
+        engine.resetContext()
+
+        if (!systemPrompt.isNullOrBlank()) {
+            engine.setSystemPrompt(systemPrompt)
+        }
+
+        var accumulated = ""
+        try {
+            engine.sendUserPrompt(prompt, GENERATE_MAX_TOKENS).collect { token ->
+                accumulated += token
+                if (onToken != null && onToken(token, accumulated)) {
+                    throw JsonCompleteException()
+                }
+            }
+        } catch (_: JsonCompleteException) {
+            // Early-stop condition satisfied (e.g., valid closing JSON brace)
+        }
+        return@withLock accumulated
+    }
+
+    override suspend fun benchmark(): String = engineMutex.withLock {
+        check(!isClosed) { "LocalGemmaProvider is closed" }
+        engine.bench(512, 128, 1, 1)
     }
 
     override fun resetContext() {
-        engine.resetContext()
+        if (!isClosed && engine.state.value is InferenceEngine.State.ModelReady) {
+            engine.resetContext()
+        }
     }
 
     override fun setThreads(threads: Int) {
-        engine.setThreads(threads)
+        if (!isClosed && engine.state.value is InferenceEngine.State.ModelReady) {
+            engine.setThreads(threads)
+        }
     }
 
     override fun getRecommendedThreads(): Int {
@@ -39,6 +121,22 @@ class LocalGemmaProvider(context: Context) : LlmProvider {
     }
 
     override fun cleanup() {
-        engine.cleanUp()
+        if (isClosed) return
+        isClosed = true
+        providerScope.launch {
+            engineMutex.withLock {
+                try {
+                    if (engine.state.value is InferenceEngine.State.ModelReady ||
+                        engine.state.value is InferenceEngine.State.Error) {
+                        engine.cleanUp()
+                    }
+                    loadedModelPath = null
+                } catch (e: Exception) {
+                    Log.e("LocalGemmaProvider", "Error during engine cleanup", e)
+                } finally {
+                    providerScope.cancel()
+                }
+            }
+        }
     }
 }

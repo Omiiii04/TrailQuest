@@ -11,4 +11,16 @@ interface LlmProvider {
     fun setThreads(threads: Int)
     fun getRecommendedThreads(): Int
     fun cleanup()
+
+    /**
+     * Executes an atomic inference transaction under exclusive engine lock.
+     * Guarantees context reset, prompt application, and stream collection
+     * cannot be interleaved by another thread, benchmark, or model reload.
+     */
+    suspend fun runTransaction(
+        prompt: String,
+        systemPrompt: String? = null,
+        threads: Int? = null,
+        onToken: ((token: String, accumulated: String) -> Boolean)? = null
+    ): String
 }

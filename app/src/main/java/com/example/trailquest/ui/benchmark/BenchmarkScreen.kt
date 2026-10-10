@@ -173,7 +173,6 @@ fun DemoScreen(
         output = "Running ${if (totalIterations == 1) "single test" else "benchmark (20 iterations)"} with $selectedThreads threads...\n\n"
 
         benchJob = scope.launch(Dispatchers.IO) {
-            llmProvider.setThreads(selectedThreads)
             var validCount = 0
             var malformedCount = 0
             var schemaFallbackCount = 0
@@ -189,8 +188,6 @@ fun DemoScreen(
                 for (i in 1..totalIterations) {
                     if (!coroutineContext.isActive) break
 
-                    llmProvider.resetContext()
-
                     var currentText = ""
                     var tokenCount = 0
                     var firstTokenMs = -1L
@@ -198,37 +195,37 @@ fun DemoScreen(
 
                     val iterStart = System.currentTimeMillis()
                     try {
-                        llmProvider.generate(BENCH_PROMPT).collect { token ->
-                            if (firstTokenMs < 0) {
-                                firstTokenMs = System.currentTimeMillis() - iterStart
-                            }
-                            currentText += token
-                            tokenCount++
+                        currentText = llmProvider.runTransaction(
+                            prompt = BENCH_PROMPT,
+                            threads = selectedThreads,
+                            onToken = { token, accumulated ->
+                                if (firstTokenMs < 0) {
+                                    firstTokenMs = System.currentTimeMillis() - iterStart
+                                }
+                                tokenCount++
 
-                            // Early-stop check: if closing brace emitted and full schema is valid
-                            if (token.contains("}")) {
-                                val candidate = extractJson(currentText)
-                                if (candidate != null) {
-                                    val check = validateAndResolveMission(candidate)
-                                    if (check.isValid) {
-                                        validatedResult = check
-                                        throw JsonCompleteException()
+                                // Early-stop check: if closing brace emitted and full schema is valid
+                                if (token.contains("}")) {
+                                    val candidate = extractJson(accumulated)
+                                    if (candidate != null) {
+                                        val check = validateAndResolveMission(candidate)
+                                        if (check.isValid) {
+                                            validatedResult = check
+                                            return@runTransaction true // Stop early
+                                        }
                                     }
                                 }
+                                false
                             }
-                        }
-                    } catch (_: JsonCompleteException) {
-                        // Completed valid JSON early
+                        )
                     } catch (e: Exception) {
                         if (e is kotlinx.coroutines.CancellationException) throw e
                     }
 
-                    if (validatedResult == null) {
+                    val res = validatedResult ?: run {
                         val parsed = extractJson(currentText)
-                        validatedResult = validateAndResolveMission(parsed)
+                        validateAndResolveMission(parsed)
                     }
-
-                    val res = validatedResult!!
                     if (res.isValid) {
                         validCount++
                     } else if (res.isMalformed) {

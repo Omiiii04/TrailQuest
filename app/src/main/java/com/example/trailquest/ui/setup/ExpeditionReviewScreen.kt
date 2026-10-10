@@ -1,5 +1,6 @@
 package com.example.trailquest.ui.setup
 
+import android.util.Log
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -22,25 +23,156 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.trailquest.LlmProvider
+import com.example.trailquest.MissionPlan
+import com.example.trailquest.MissionValidationResult
+import com.example.trailquest.ModelInstaller
 import com.example.trailquest.R
+import com.example.trailquest.buildMissionPrompt
+import com.example.trailquest.extractJson
+import com.example.trailquest.toMissionPlan
+import com.example.trailquest.validateAndResolveMission
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+enum class GenerationStage(val label: String) {
+    PREPARING_MODEL("Preparing offline model..."),
+    LOADING_MODEL("Loading on-device model..."),
+    GENERATING_MISSION("Generating mission with local AI..."),
+    VALIDATING_MISSION("Validating mission...")
+}
+
+sealed class GenerationState {
+    data object Idle : GenerationState()
+    data class Loading(val stage: GenerationStage, val progress: Float = 0f) : GenerationState()
+    data class Error(val message: String) : GenerationState()
+}
 
 @Composable
 fun ExpeditionReviewScreen(
     config: ExpeditionConfig,
+    llmProviderFactory: () -> LlmProvider,
+    modelInstaller: ModelInstaller,
+    onMissionGenerated: (MissionPlan) -> Unit,
     onEdit: () -> Unit,
     onHome: () -> Unit,
+    autoGenerate: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    val scope = rememberCoroutineScope()
+    var state by remember { mutableStateOf<GenerationState>(GenerationState.Idle) }
+    var isGenerating by remember { mutableStateOf(false) }
+    val installerProgress by modelInstaller.progress.collectAsState()
+
+    fun startGeneration() {
+        if (isGenerating) return
+        isGenerating = true
+        state = GenerationState.Loading(GenerationStage.PREPARING_MODEL, installerProgress)
+
+        scope.launch(Dispatchers.IO) {
+            try {
+                // 1. Preparing offline model
+                val modelPath = modelInstaller.installModel("gemma-3-270m-it-q4_k_m.gguf")
+
+                // 2. Loading on-device model
+                withContext(Dispatchers.Main) {
+                    state = GenerationState.Loading(GenerationStage.LOADING_MODEL)
+                }
+                val provider = llmProviderFactory()
+                provider.loadModel(modelPath)
+
+                // 3. Generating mission with atomic transaction
+                withContext(Dispatchers.Main) {
+                    state = GenerationState.Loading(GenerationStage.GENERATING_MISSION)
+                }
+                val prompt = buildMissionPrompt(config)
+                var earlyValidatedResult: MissionValidationResult? = null
+
+                val rawResponse = provider.runTransaction(
+                    prompt = prompt,
+                    threads = 4,
+                    onToken = { token, accumulated ->
+                        if (token.contains("}")) {
+                            val candidate = extractJson(accumulated)
+                            if (candidate != null) {
+                                val check = validateAndResolveMission(candidate, config)
+                                if (check.isValid) {
+                                    earlyValidatedResult = check
+                                    return@runTransaction true // Stop early on valid JSON
+                                }
+                            }
+                        }
+                        false
+                    }
+                )
+
+                // 4. Validating mission
+                withContext(Dispatchers.Main) {
+                    state = GenerationState.Loading(GenerationStage.VALIDATING_MISSION)
+                }
+                val finalResult = earlyValidatedResult ?: run {
+                    val parsed = extractJson(rawResponse)
+                    validateAndResolveMission(parsed, config)
+                }
+                Log.i("TrailQuest", "LLM raw response: $rawResponse")
+                Log.i("TrailQuest", "Mission validated: isValid=${finalResult.isValid}, isFallbackApplied=${finalResult.isFallbackApplied}, reason=${finalResult.failureReason}")
+
+                val missionPlan = finalResult.finalMission.toMissionPlan(
+                    config = config,
+                    isAiGenerated = finalResult.isValid && !finalResult.isFallbackApplied
+                )
+
+                withContext(Dispatchers.Main) {
+                    isGenerating = false
+                    state = GenerationState.Idle
+                    onMissionGenerated(missionPlan)
+                }
+            } catch (e: CancellationException) {
+                withContext(Dispatchers.Main) {
+                    isGenerating = false
+                    state = GenerationState.Idle
+                }
+                throw e
+            } catch (e: Exception) {
+                Log.e("TrailQuest/Expedition", "Generation failed", e)
+                withContext(Dispatchers.Main) {
+                    isGenerating = false
+                    state = GenerationState.Error(e.message ?: "Failed to generate mission")
+                }
+            }
+        }
+    }
+
+    // One-shot auto-generation if requested (e.g. from Regenerate action on MissionScreen)
+    var hasAutoGenerated by rememberSaveable(config) { mutableStateOf(false) }
+    LaunchedEffect(autoGenerate) {
+        if (autoGenerate && !hasAutoGenerated) {
+            hasAutoGenerated = true
+            startGeneration()
+        }
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -56,7 +188,8 @@ fun ExpeditionReviewScreen(
         ) {
             IconButton(
                 onClick = onEdit,
-                modifier = Modifier.size(40.dp)
+                modifier = Modifier.size(40.dp),
+                enabled = !isGenerating
             ) {
                 Icon(
                     painter = painterResource(id = R.drawable.ic_arrow_back),
@@ -209,59 +342,143 @@ fun ExpeditionReviewScreen(
 
                     Spacer(modifier = Modifier.height(4.dp))
 
-                    // Edit button
                     OutlinedButton(
                         onClick = onEdit,
                         shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !isGenerating
                     ) {
                         Text("Edit expedition")
                     }
                 }
             }
 
-            // Phase 2 Roadmap / AI Mission generation notice
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(18.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(end = 8.dp)
+            // Generation State Card
+            when (val current = state) {
+                is GenerationState.Loading -> {
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(18.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             Text(
-                                text = "PHASE 2 ROADMAP",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimary,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                text = current.stage.label,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+
+                            if (current.stage == GenerationStage.PREPARING_MODEL && installerProgress > 0f) {
+                                LinearProgressIndicator(
+                                    progress = { installerProgress },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            } else {
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            }
+
+                            Text(
+                                text = "Running 100% locally on your device with Gemma 3. Please keep the app open.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
-                    Text(
-                        text = "On-Device Mission Generation",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = "In Phase 2, Gemma 3 will turn this setup into tailored trail missions directly on your device with zero cloud connectivity. AI mission generation will be connected in the next phase.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                }
+                is GenerationState.Error -> {
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f)),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(18.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(
+                                text = "Generation Failed",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                            Text(
+                                text = current.message,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Button(
+                                    onClick = { startGeneration() },
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("Retry")
+                                }
+                                OutlinedButton(
+                                    onClick = onEdit,
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("Edit Setup")
+                                }
+                            }
+                        }
+                    }
+                }
+                is GenerationState.Idle -> {
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(18.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(end = 8.dp)
+                                ) {
+                                    Text(
+                                        text = "ON-DEVICE AI",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onPrimary,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                                Text(
+                                    text = "Ready to Generate",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            Text(
+                                text = "Gemma 3 will generate an outdoor mission tailored to your ${config.durationMinutes}-minute ${config.difficulty.title.lowercase()} ${config.activity.title.lowercase()}. Private, fast, and completely offline.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                 }
             }
         }
 
-        // Bottom Action
+        // Bottom Primary Action
         Surface(
             color = MaterialTheme.colorScheme.background,
             modifier = Modifier
@@ -269,7 +486,8 @@ fun ExpeditionReviewScreen(
                 .padding(top = 12.dp)
         ) {
             Button(
-                onClick = onHome,
+                onClick = { startGeneration() },
+                enabled = !isGenerating,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp),
@@ -280,7 +498,7 @@ fun ExpeditionReviewScreen(
                 )
             ) {
                 Text(
-                    text = "Return to Home",
+                    text = if (isGenerating) "Generating mission..." else "Generate my mission",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold
                 )

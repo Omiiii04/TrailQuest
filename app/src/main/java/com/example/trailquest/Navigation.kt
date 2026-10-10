@@ -7,6 +7,7 @@ import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
 import com.example.trailquest.ui.benchmark.BenchmarkScreen
 import com.example.trailquest.ui.home.HomeScreen
+import com.example.trailquest.ui.mission.MissionScreen
 import com.example.trailquest.ui.setup.ExpeditionDraftState
 import com.example.trailquest.ui.setup.ExpeditionReviewScreen
 import com.example.trailquest.ui.setup.ExpeditionSetupScreen
@@ -41,12 +42,35 @@ fun MainNavigation(
             entry<ExpeditionReviewKey> { key ->
                 ExpeditionReviewScreen(
                     config = key.config,
+                    autoGenerate = key.autoGenerate,
+                    llmProviderFactory = llmProviderFactory,
+                    modelInstaller = modelInstaller,
+                    onMissionGenerated = { missionPlan ->
+                        backStack.add(MissionKey(mission = missionPlan, config = key.config))
+                    },
                     onEdit = {
                         backStack.removeLastOrNull()
                     },
                     onHome = {
                         backStack.clear()
                         backStack.add(HomeKey)
+                    }
+                )
+            }
+            entry<MissionKey> { key ->
+                MissionScreen(
+                    mission = key.mission,
+                    onDone = {
+                        backStack.clear()
+                        backStack.add(HomeKey)
+                    },
+                    onEdit = {
+                        backStack.removeLastOrNull() // pop MissionKey
+                        backStack.removeLastOrNull() // pop ExpeditionReviewKey
+                    },
+                    onRegenerate = {
+                        backStack.removeLastOrNull() // pop MissionKey
+                        backStack.add(ExpeditionReviewKey(config = key.config, autoGenerate = true))
                     }
                 )
             }

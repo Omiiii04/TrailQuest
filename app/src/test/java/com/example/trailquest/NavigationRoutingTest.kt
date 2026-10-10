@@ -4,7 +4,9 @@ import com.example.trailquest.ui.setup.ExpeditionActivity
 import com.example.trailquest.ui.setup.ExpeditionConfig
 import com.example.trailquest.ui.setup.ExpeditionDifficulty
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NavigationRoutingTest {
@@ -46,5 +48,30 @@ class NavigationRoutingTest {
         assertNotEquals(key1, key3)
         assertEquals(60, key1.config.durationMinutes)
         assertEquals(ExpeditionActivity.HIKE, key1.config.activity)
+        assertFalse(key1.autoGenerate)
+    }
+
+    @Test
+    fun missionKey_holdsValidatedMissionAndConfig() {
+        val config = ExpeditionConfig(
+            activity = ExpeditionActivity.HIKE,
+            durationMinutes = 30,
+            difficulty = ExpeditionDifficulty.MODERATE
+        )
+        val mission = MissionPlan(
+            title = "Ridge Trail",
+            durationMinutes = 30,
+            tasks = listOf("Task 1", "Task 2"),
+            activity = ExpeditionActivity.HIKE,
+            difficulty = ExpeditionDifficulty.MODERATE,
+            isAiGenerated = true
+        )
+
+        val key = MissionKey(mission = mission, config = config)
+        assertEquals("Ridge Trail", key.mission.title)
+        assertEquals(30, key.mission.durationMinutes)
+        assertEquals(2, key.mission.tasks.size)
+        assertTrue(key.mission.isAiGenerated)
+        assertEquals(config, key.config)
     }
 }

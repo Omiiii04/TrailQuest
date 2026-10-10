@@ -28,6 +28,13 @@ class LazyModelInitTest {
         override fun cleanup() {
             isCleanedUp = true
         }
+
+        override suspend fun runTransaction(
+            prompt: String,
+            systemPrompt: String?,
+            threads: Int?,
+            onToken: ((token: String, accumulated: String) -> Boolean)?
+        ): String = "transaction_ok"
     }
 
     private class ProviderLifecycleOwner {

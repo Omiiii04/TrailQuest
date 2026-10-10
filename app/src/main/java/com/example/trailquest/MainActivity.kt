@@ -1,24 +1,38 @@
 package com.example.trailquest
 
+import android.app.Application
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.AndroidViewModel
 import com.example.trailquest.theme.TrailQuestTheme
 
-class MainActivity : ComponentActivity() {
+class AppViewModel(application: Application) : AndroidViewModel(application) {
     private var _llmProvider: LlmProvider? = null
-    private lateinit var modelInstaller: ModelInstaller
 
-    private fun getOrCreateLlmProvider(): LlmProvider {
+    fun getOrCreateLlmProvider(): LlmProvider {
         if (_llmProvider == null) {
-            _llmProvider = LocalGemmaProvider(applicationContext)
+            _llmProvider = LocalGemmaProvider(getApplication<Application>())
         }
         return _llmProvider!!
     }
+
+    fun hasInstantiatedProvider(): Boolean = _llmProvider != null
+
+    override fun onCleared() {
+        super.onCleared()
+        _llmProvider?.cleanup()
+    }
+}
+
+class MainActivity : ComponentActivity() {
+    private val appViewModel: AppViewModel by viewModels()
+    private lateinit var modelInstaller: ModelInstaller
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -32,16 +46,11 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background
                 ) {
                     MainNavigation(
-                        llmProviderFactory = ::getOrCreateLlmProvider,
+                        llmProviderFactory = appViewModel::getOrCreateLlmProvider,
                         modelInstaller = modelInstaller
                     )
                 }
             }
         }
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        _llmProvider?.cleanup()
     }
 }
