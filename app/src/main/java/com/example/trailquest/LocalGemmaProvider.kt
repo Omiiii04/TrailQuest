@@ -37,12 +37,6 @@ class LocalGemmaProvider internal constructor(
     // ponytail: 256 tokens is plenty for a short JSON response; raise if generation is cut short
     private val GENERATE_MAX_TOKENS = 256
 
-    private val cachedRecommendedThreads: Int = try {
-        engine.getRecommendedThreads()
-    } catch (_: Exception) {
-        4
-    }
-
     fun isClosed(): Boolean = isClosed.get()
 
     override suspend fun loadModel(path: String) = engineMutex.withLock {
@@ -150,7 +144,11 @@ class LocalGemmaProvider internal constructor(
     }
 
     override fun getRecommendedThreads(): Int {
-        return cachedRecommendedThreads
+        return try {
+            engine.getRecommendedThreads()
+        } catch (_: Throwable) {
+            4
+        }
     }
 
     override fun cleanup() {
