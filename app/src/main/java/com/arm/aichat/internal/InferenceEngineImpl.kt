@@ -334,7 +334,7 @@ internal class InferenceEngineImpl private constructor(
     override fun getRecommendedThreads(): Int {
         return try {
             getRecommendedThreadsNative()
-        } catch (_: Throwable) {
+        } catch (_: UnsatisfiedLinkError) {
             4
         }
     }

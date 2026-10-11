@@ -146,7 +146,7 @@ class LocalGemmaProvider internal constructor(
     override fun getRecommendedThreads(): Int {
         return try {
             engine.getRecommendedThreads()
-        } catch (_: Throwable) {
+        } catch (_: UnsatisfiedLinkError) {
             4
         }
     }

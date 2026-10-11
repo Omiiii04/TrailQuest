@@ -13,6 +13,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.atomic.AtomicInteger
@@ -90,7 +91,10 @@ class LocalGemmaProviderTest {
             activeThreads = threads
         }
 
-        override fun getRecommendedThreads(): Int = 4
+        var recommendedThreadsBehavior: () -> Int = { 4 }
+
+        override fun getRecommendedThreads(): Int =
+            recommendedThreadsBehavior()
         override fun destroy() {}
 
         fun simulateError() {
@@ -260,6 +264,57 @@ class LocalGemmaProviderTest {
         provider.cleanup()
         assertTrue(provider.isClosed())
         assertEquals(4, provider.getRecommendedThreads())
+    }
+
+    @Test
+    fun getRecommendedThreads_whenUnsatisfiedLinkError_fallsBackTo4() {
+        val fakeEngine = FakeInferenceEngine()
+        fakeEngine.recommendedThreadsBehavior = { throw UnsatisfiedLinkError("Simulated JNI link error") }
+        val provider = LocalGemmaProvider(fakeEngine)
+
+        assertEquals(4, provider.getRecommendedThreads())
+    }
+
+    @Test
+    fun getRecommendedThreads_whenOutOfMemoryError_propagatesWithoutSwallowing() {
+        val fakeEngine = FakeInferenceEngine()
+        fakeEngine.recommendedThreadsBehavior = { throw OutOfMemoryError("Simulated OOM") }
+        val provider = LocalGemmaProvider(fakeEngine)
+
+        assertThrows(OutOfMemoryError::class.java) {
+            provider.getRecommendedThreads()
+        }
+    }
+
+    @Test
+    fun getRecommendedThreads_whenAssertionError_propagatesWithoutSwallowing() {
+        val fakeEngine = FakeInferenceEngine()
+        fakeEngine.recommendedThreadsBehavior = { throw AssertionError("Simulated assertion failure") }
+        val provider = LocalGemmaProvider(fakeEngine)
+
+        assertThrows(AssertionError::class.java) {
+            provider.getRecommendedThreads()
+        }
+    }
+
+    @Test
+    fun getRecommendedThreads_whenUnrelatedRuntimeException_propagatesWithoutSwallowing() {
+        val fakeEngine = FakeInferenceEngine()
+        fakeEngine.recommendedThreadsBehavior = { throw IllegalStateException("Unexpected engine failure") }
+        val provider = LocalGemmaProvider(fakeEngine)
+
+        assertThrows(IllegalStateException::class.java) {
+            provider.getRecommendedThreads()
+        }
+    }
+
+    @Test
+    fun getRecommendedThreads_whenEngineSucceeds_returnsActualValue() {
+        val fakeEngine = FakeInferenceEngine()
+        fakeEngine.recommendedThreadsBehavior = { 8 }
+        val provider = LocalGemmaProvider(fakeEngine)
+
+        assertEquals(8, provider.getRecommendedThreads())
     }
 
     @Test
