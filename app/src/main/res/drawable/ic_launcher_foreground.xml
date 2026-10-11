@@ -1,30 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <path android:pathData="M31,63.928c0,0 6.4,-11 12.1,-13.1c7.2,-2.6 26,-1.4 26,-1.4l38.1,38.1L107,108.928l-32,-1L31,63.928z">
-        <aapt:attr name="android:fillColor">
-            <gradient
-                android:endX="85.84757"
-                android:endY="92.4963"
-                android:startX="42.9492"
-                android:startY="49.59793"
-                android:type="linear">
-                <item
-                    android:color="#44000000"
-                    android:offset="0.0" />
-                <item
-                    android:color="#00000000"
-                    android:offset="1.0" />
-            </gradient>
-        </aapt:attr>
-    </path>
+
+    <!-- Background Left Peak -->
+    <path
+        android:fillColor="#7CAE83"
+        android:pathData="M36,40 L22,65 L36,59 Z" />
+    <path
+        android:fillColor="#2B462E"
+        android:pathData="M36,40 L36,59 L46,65 Z" />
+
+    <!-- Background Right Peak -->
+    <path
+        android:fillColor="#6E9F75"
+        android:pathData="M72,42 L62,65 L72,59 Z" />
+    <path
+        android:fillColor="#1F3722"
+        android:pathData="M72,42 L72,59 L84,65 Z" />
+
+    <!-- Center Main Peak (Left Sunlit Face: Warm Ivory) -->
+    <path
+        android:fillColor="#FCFAF5"
+        android:pathData="M54,28 L32,65 L54,55 Z" />
+
+    <!-- Center Main Peak (Right Shadow Face: Sage Green) -->
+    <path
+        android:fillColor="#526350"
+        android:pathData="M54,28 L54,55 L76,65 Z" />
+
+    <!-- Center Peak Summit Snowcap / Highlight -->
     <path
         android:fillColor="#FFFFFF"
-        android:fillType="nonZero"
-        android:pathData="M65.3,45.828l3.8,-6.6c0.2,-0.4 0.1,-0.9 -0.3,-1.1c-0.4,-0.2 -0.9,-0.1 -1.1,0.3l-3.9,6.7c-6.3,-2.8 -13.4,-2.8 -19.7,0l-3.9,-6.7c-0.2,-0.4 -0.7,-0.5 -1.1,-0.3C38.8,38.328 38.7,38.828 38.9,39.228l3.8,6.6C36.2,49.428 31.7,56.028 31,63.928h46C76.3,56.028 71.8,49.428 65.3,45.828zM43.4,57.328c-0.8,0 -1.5,-0.5 -1.8,-1.2c-0.3,-0.7 -0.1,-1.5 0.4,-2.1c0.5,-0.5 1.4,-0.7 2.1,-0.4c0.7,0.3 1.2,1 1.2,1.8C45.3,56.528 44.5,57.328 43.4,57.328L43.4,57.328zM64.6,57.328c-0.8,0 -1.5,-0.5 -1.8,-1.2s-0.1,-1.5 0.4,-2.1c0.5,-0.5 1.4,-0.7 2.1,-0.4c0.7,0.3 1.2,1 1.2,1.8C66.5,56.528 65.6,57.328 64.6,57.328L64.6,57.328z"
-        android:strokeWidth="1"
-        android:strokeColor="#00000000" />
+        android:pathData="M54,28 L45,41 L54,38 L63,41 Z" />
+
+    <!-- Dynamic Winding Trail -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FCFAF5"
+        android:strokeWidth="3.6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M52,78 C41,73 37,67 44,62 C51,57 56,56 54,53" />
+
+    <!-- Subtle Trailhead Origin Accent -->
+    <path
+        android:fillColor="#FCFAF5"
+        android:pathData="M52,79 A2.2,2.2 0 1,1 51.99,79 Z" />
+
+    <!-- Nature Leaf Accent above Summit -->
+    <path
+        android:fillColor="#8DC093"
+        android:pathData="M54,16 C51,19 50,23 54,25 C58,23 57,19 54,16 Z" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#16331C"
+        android:strokeWidth="0.8"
+        android:pathData="M54,18 L54,24" />
 </vector>

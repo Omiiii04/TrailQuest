@@ -8,7 +8,7 @@ TrailQuest creates guided outdoor activity prompts tailored by activity type, du
 
 ## Screenshots
 
-Captured from physical device testing on a Samsung Galaxy F34 5G (Android 16, `arm64-v8a`):
+Captured from physical device testing on a Samsung Galaxy F34 5G (`arm64-v8a`):
 
 |               Home Screen               |                Expedition Setup                |                Expedition Review                |
 | :--------------------------------------: | :--------------------------------------------: | :----------------------------------------------: |
@@ -109,8 +109,7 @@ The following figures reflect recorded verification for implementation commit `0
 | **Implementation Commit** | `0c537f8`                                                 |
 | **Unit Tests**            | 63 passed (0 failures, 0 errors, 0 skipped across 8 suites) |
 | **Release Build**         | Successful                                                  |
-| **Physical Device**       | Samsung Galaxy F34 5G (`SM-E346B`)                        |
-| **Android Version**       | Android 16                                                  |
+| **Physical Device**       | Samsung Galaxy F34 5G                                       |
 | **Native ABI**            | `arm64-v8a` only                                          |
 | **Release APK Size**      | 403,727,280 bytes (403.7 MB / 385.0 MiB)                    |
 | **Android Permissions**   | Zero network or location permissions                        |

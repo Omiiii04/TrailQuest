@@ -1,8 +1,7 @@
 # TrailQuest Benchmark & Physical Device Verification
 
 ## Environment & Hardware
-- **Device Name:** Samsung Galaxy F34 5G (SM-E346B) *(Note: SM-E346B is the Galaxy F34 5G; Galaxy M34 5G uses SM-M346B)*
-- **OS Version:** Android 16
+- **Device Name:** Samsung Galaxy F34 5G
 - **Build Mode:** Release (-O3, NDEBUG)
 - **Architecture:** arm64-v8a only
 - **Model:** Gemma 3 270M IT Q4_K_M GGUF (HF revision `88762a3700deaf5b03184019806c88dc9b5c8876`)
@@ -17,11 +16,11 @@
 - **Release APK Size:** 403.7 MB (385.0 MiB) — exact size: 403,727,280 bytes
 - **Model File Size:** 253.1 MB (241.4 MiB) — exact size: 253,114,880 bytes
 - **Model Integrity:** SHA-256 `55aed1673d2f3014a739732c659c4995fc57abf6e4e9c68462fb2ceee820ea2f`
-- **Signing Scheme:** APK Signature Scheme v2 (Signer: `CN=Omii, O=SPPU, L=India`)
+- **Signing Scheme:** Release APK signed; certificate identity omitted
 - **ABI:** `arm64-v8a` only
 - **SDK Targets:** minSdk 24 (Android 7.0), targetSdk 36, compileSdk 36
 
-### Live Physical Device Smoke Test (Samsung Galaxy F34 5G, SM-E346B)
+### Live Physical Device Smoke Test (Samsung Galaxy F34 5G)
 1. **Lazy Model Initialization:** Verified via logcat. Process starts on Home screen (`MainActivity`) without loading the model, allocating native context, or calling JNI.
 2. **On-Device Mission Generation:** Generated a 15-minute Easy Walk expedition locally in ~6.4s wall time:
    - Raw output: strictly formatted JSON (`title`, `activity`, `durationMinutes`, `difficulty`, `missions`).
@@ -47,7 +46,7 @@
 
 ## Historical Benchmark Data (Baseline Session)
 
-> **Context:** The metrics below were recorded during an initial 20-iteration baseline benchmarking session on an earlier release build artifact (403.6 MB / 384.9 MiB, 403,637,744 bytes) on the same Samsung Galaxy F34 5G (SM-E346B) hardware.
+> **Context:** The metrics below were recorded during an initial 20-iteration baseline benchmarking session on an earlier release build artifact (403.6 MB / 384.9 MiB, 403,637,744 bytes) on the same Samsung Galaxy F34 5G hardware.
 
 ### Application Setup & Storage Metrics (Historical)
 - **Release APK Size:** 403.6 MB (384.9 MiB) — 403,637,744 bytes

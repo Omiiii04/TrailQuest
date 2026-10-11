@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Background Left Peak Silhouette -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M35,41 L23,64 L34,59 Z" />
+
+    <!-- Background Right Peak Silhouette -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M73,43 L63,64 L73,59 Z" />
+
+    <!-- Center Main Peak - Left Facet -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M53,30 L34,64 L52,55 Z" />
+
+    <!-- Center Main Peak - Right Facet Outline / Ridge Accent -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M55,31 L74,64 L56,56" />
+
+    <!-- Dynamic Winding Trail -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M52,78 C41,73 37,67 44,62 C51,57 56,56 54,53" />
+
+    <!-- Subtle Trailhead Origin Accent -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M52,79 A2.2,2.2 0 1,1 51.99,79 Z" />
+
+    <!-- Nature Leaf Accent above Summit -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,16 C51,19 50,23 54,25 C58,23 57,19 54,16 Z" />
+</vector>
