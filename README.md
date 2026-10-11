@@ -86,6 +86,7 @@ cd TrailQuest
 python scripts/fetch_model.py
 .\gradlew.bat testDebugUnitTest
 .\gradlew.bat assembleRelease
+adb install -r "app\build\outputs\apk\release\app-release.apk"
 ```
 
 `scripts/fetch_model.py` downloads or validates the model file into `app/src/main/assets/models/`:
